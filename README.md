@@ -4,7 +4,7 @@ A lightweight tool used to parse chat logs generated during a FiveM session.
 
 Built with [GLFW](https://www.glfw.org/) and [ImGui](https://github.com/ocornut/imgui).
 
-https://github.com/user-attachments/assets/a3eba1fd-cb94-4dc9-af14-4a2675819a05
+https://github.com/user-attachments/assets/e6b9e2f4-42dc-4b4a-9036-c37bbe060f99
 
 ## Building
 
