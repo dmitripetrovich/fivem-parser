@@ -8,18 +8,12 @@ extern "C" {
 
 typedef struct {
         int remove_timestamps;
-        int backup_enabled;
-        char backup_path[MAX_PATH];
-        int interval_enabled;
-        int interval_minutes;
 } Config;
 
 extern Config g_config;
 
 void config_load(void);
 void config_save(void);
-
-char *parse_log_file(const char *path, int remove_timestamps);
 
 typedef struct {
         char timestamp[64];
@@ -35,9 +29,6 @@ typedef struct {
 
 ChatLog *parse_log_chat(const char *path, int remove_timestamps);
 void chatlog_free(ChatLog *log);
-
-void backup_on_timer(void);
-void backup_on_interval(void);
 
 #ifdef __cplusplus
 }

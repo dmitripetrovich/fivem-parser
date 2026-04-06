@@ -67,8 +67,10 @@ int find_latest_log(char *out, int out_size) {
                 return 0;
         char best[MAX_PATH] = "";
         FILETIME best_time = {0, 0};
+        int first = 1;
         do {
-                if (CompareFileTime(&fd.ftLastWriteTime, &best_time) > 0) {
+                if (first || CompareFileTime(&fd.ftLastWriteTime, &best_time) > 0) {
+                        first = 0;
                         snprintf(best, sizeof(best), "%s", fd.cFileName);
                         best_time = fd.ftLastWriteTime;
                 }
@@ -76,31 +78,6 @@ int find_latest_log(char *out, int out_size) {
         FindClose(h);
         snprintf(out, (size_t)out_size, "%s\\%s", dir, best);
         return 1;
-}
-
-void ensure_directory(const char *path) {
-        char tmp[MAX_PATH * 2];
-        strncpy(tmp, path, sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
-        char *start = tmp;
-        if (start[0] && start[1] == ':' && (start[2] == '\\' || start[2] == '/'))
-                start += 3;
-        else if ((start[0] == '\\' && start[1] == '\\') || (start[0] == '/' && start[1] == '/')) {
-                start += 2;
-                while (*start && *start != '\\' && *start != '/') start++;
-                if (*start) start++;
-                while (*start && *start != '\\' && *start != '/') start++;
-                if (*start) start++;
-        }
-        for (char *p = start; *p; p++) {
-                if (*p == '\\' || *p == '/') {
-                        char saved = *p;
-                        *p = '\0';
-                        CreateDirectoryA(tmp, NULL);
-                        *p = saved;
-                }
-        }
-        CreateDirectoryA(tmp, NULL);
 }
 
 const char *stristr(const char *h, const char *n) {

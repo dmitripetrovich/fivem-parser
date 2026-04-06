@@ -24,6 +24,11 @@ ChatLog *parse_log_chat(const char *path, int remove_timestamps) {
         }
         char line[8192];
         while (fgets(line, sizeof(line), f)) {
+                size_t llen = strlen(line);
+                if (llen > 0 && line[llen - 1] != '\n') {
+                        int ch;
+                        while ((ch = fgetc(f)) != '\n' && ch != EOF);
+                }
                 char *chat = strstr(line, "[chat] ");
                 if (!chat)
                         continue;
@@ -83,78 +88,4 @@ void chatlog_free(ChatLog *log) {
                 free(log->entries);
                 free(log);
         }
-}
-
-char *parse_log_file(const char *path, int remove_timestamps) {
-        FILE *f = fopen(path, "r");
-        if (!f)
-                return NULL;
-        size_t cap = 512 * 1024;
-        char *out = (char *)malloc(cap);
-        size_t outlen = 0;
-        if (!out) {
-                fclose(f);
-                return NULL;
-        }
-        out[0] = '\0';
-        char line[8192];
-        while (fgets(line, sizeof(line), f)) {
-                char *chat = strstr(line, "[chat] ");
-                if (!chat)
-                        continue;
-                chat += 7;
-                if (*chat == ' ')
-                        chat++;
-                char msg[8192];
-                snprintf(msg, sizeof(msg), "%s", chat);
-                if (!rtrim_newline(msg))
-                        continue;
-                strip_color_codes(msg);
-                if (!msg[0])
-                        continue;
-                char entry[8320];
-                if (remove_timestamps) {
-                        snprintf(entry, sizeof(entry), "%s\r\n", msg);
-                } else {
-                        char ts[64] = "";
-                        if (line[0] == '[') {
-                                char *end = strchr(line, ']');
-                                if (end) {
-                                        char numstr[64] = "";
-                                        int nlen = (int)(end - line) - 1;
-                                        if (nlen > 0 && nlen < (int)sizeof(numstr)) {
-                                                memcpy(numstr, line + 1, (size_t)nlen);
-                                                numstr[nlen] = '\0';
-                                                long ms = atol(numstr);
-                                                if (ms >= 0) {
-                                                        long total_sec = ms / 1000;
-                                                        int h = (int)(total_sec / 3600);
-                                                        int m = (int)((total_sec % 3600) / 60);
-                                                        int s = (int)(total_sec % 60);
-                                                        snprintf(ts, sizeof(ts), "[%02d:%02d:%02d]", h, m, s);
-                                                }
-                                        }
-                                }
-                        }
-                        if (ts[0])
-                                snprintf(entry, sizeof(entry), "%s %s\r\n", ts, msg);
-                        else
-                                snprintf(entry, sizeof(entry), "%s\r\n", msg);
-                }
-                size_t elen = strlen(entry);
-                if (outlen + elen + 1 >= cap) {
-                        size_t need = cap + elen + 1;
-                        if (need > SIZE_MAX / 2)
-                                break;
-                        cap = need * 2;
-                        char *tmp = (char *)realloc(out, cap);
-                        if (!tmp)
-                                break;
-                        out = tmp;
-                }
-                memcpy(out + outlen, entry, elen + 1);
-                outlen += elen;
-        }
-        fclose(f);
-        return out;
 }

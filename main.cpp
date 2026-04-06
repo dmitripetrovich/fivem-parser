@@ -53,19 +53,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int nShow) {
         ImGui_ImplGlfw_InitForOpenGL(window, true);
         ImGui_ImplOpenGL3_Init("#version 130");
         ui_init(window);
-        double last_backup = glfwGetTime();
-        double last_interval = glfwGetTime();
         while (!glfwWindowShouldClose(window)) {
                 glfwWaitEventsTimeout(0.5);
-                double now = glfwGetTime();
-                if (now - last_backup >= 10.0) {
-                        backup_on_timer();
-                        last_backup = now;
-                }
-                if (g_config.interval_enabled && g_config.interval_minutes > 0 && now - last_interval >= g_config.interval_minutes * 60.0) {
-                        backup_on_interval();
-                        last_interval = now;
-                }
                 ImGui_ImplOpenGL3_NewFrame();
                 ImGui_ImplGlfw_NewFrame();
                 ImGui::NewFrame();

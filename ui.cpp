@@ -41,12 +41,6 @@ static std::vector<int> s_flt_indices;
 static size_t s_flt_chars = 0;
 static std::string s_regex_error;
 
-static bool s_open_backup = false;
-static bool s_bkp_enabled = false;
-static char s_bkp_path[MAX_PATH] = "";
-static bool s_bkp_interval_en = false;
-static int s_bkp_interval_min = 10;
-
 static bool s_open_about = false;
 
 static ImVec4 color_palette(int code) {
@@ -216,7 +210,7 @@ static void apply_filter(void) {
                                                 return false;
                                         }
                                         try {
-                                                dst.push_back(std::regex(kw, std::regex::icase));
+                                                dst.push_back(std::regex(kw, std::regex::icase | std::regex::nosubs | std::regex::optimize));
                                         } catch (std::regex_error &) {
                                                 s_regex_error = "Invalid regex: " + kw;
                                                 return false;
@@ -298,10 +292,8 @@ static void do_parse(GLFWwindow *w) {
                 MessageBoxA(glfwGetWin32Window(w), "Failed to open log file.\n\n" "Make sure FiveM has been launched at least once " "and the file exists at the specified path.", "Error", MB_ICONERROR);
                 return;
         }
-        s_chat.clear();
-        s_flt_indices.clear();
-        s_flt_chars = 0;
-        s_chat.reserve((size_t)log->count);
+        std::vector<ChatLine> tmp;
+        tmp.reserve((size_t)log->count);
         s_total_chars = 0;
         for (int i = 0; i < log->count; i++) {
                 ChatEntry *e = &log->entries[i];
@@ -310,9 +302,19 @@ static void do_parse(GLFWwindow *w) {
                 cl.plain = e->plain;
                 cl.segments = parse_segments(e->raw);
                 s_total_chars += strlen(e->plain) + strlen(e->timestamp) + 3;
-                s_chat.push_back(std::move(cl));
+                tmp.push_back(std::move(cl));
         }
         chatlog_free(log);
+        s_chat = std::move(tmp);
+        s_flt_indices.clear();
+        s_flt_indices.shrink_to_fit();
+        s_flt_chars = 0;
+        if (s_show_filter) {
+                s_flt_indices.reserve(s_chat.size());
+                for (int i = 0; i < (int)s_chat.size(); i++)
+                        s_flt_indices.push_back(i);
+                s_flt_chars = s_total_chars;
+        }
 }
 
 static void do_save(GLFWwindow *w, const std::string &text, const char *default_name) {
@@ -379,13 +381,6 @@ void ui_render(GLFWwindow *w) {
                                 s_flt_indices.push_back(i);
                         s_flt_chars = s_total_chars;
                 }
-                if (ImGui::MenuItem("Backup Settings")) {
-                        s_open_backup = true;
-                        s_bkp_enabled = (g_config.backup_enabled != 0);
-                        snprintf(s_bkp_path, sizeof(s_bkp_path), "%s", g_config.backup_path);
-                        s_bkp_interval_en = (g_config.interval_enabled != 0);
-                        s_bkp_interval_min = g_config.interval_minutes;
-                }
                 if (ImGui::MenuItem("About"))
                         s_open_about = true;
                 ImGui::EndMenuBar();
@@ -433,43 +428,9 @@ void ui_render(GLFWwindow *w) {
                 std::string plain = build_plain(s_chat);
                 do_copy(w, plain);
         }
-        if (s_open_backup) {
-                ImGui::OpenPopup("Backup Settings");
-                s_open_backup = false;
-        }
         if (s_open_about) {
                 ImGui::OpenPopup("About");
                 s_open_about = false;
-        }
-        if (ImGui::BeginPopupModal("Backup Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Checkbox("Enable automatic backup on game close", &s_bkp_enabled);
-                ImGui::Spacing();
-                ImGui::Text("Backup folder:");
-                ImGui::SetNextItemWidth(380);
-                ImGui::InputText("##bkp_path", s_bkp_path, sizeof(s_bkp_path));
-                ImGui::Spacing();
-                ImGui::Checkbox("Enable interval backup while playing", &s_bkp_interval_en);
-                if (!s_bkp_interval_en) ImGui::BeginDisabled();
-                ImGui::SetNextItemWidth(100);
-                ImGui::InputInt("Interval (minutes)", &s_bkp_interval_min);
-                if (!s_bkp_interval_en) ImGui::EndDisabled();
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-                if (ImGui::Button("OK", ImVec2(80, 0))) {
-                        if (s_bkp_interval_min < 1) s_bkp_interval_min = 1;
-                        if (s_bkp_interval_min > 60) s_bkp_interval_min = 60;
-                        g_config.backup_enabled = s_bkp_enabled ? 1 : 0;
-                        snprintf(g_config.backup_path, sizeof(g_config.backup_path), "%s", s_bkp_path);
-                        g_config.interval_enabled = s_bkp_interval_en ? 1 : 0;
-                        g_config.interval_minutes = s_bkp_interval_min;
-                        config_save();
-                        ImGui::CloseCurrentPopup();
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel", ImVec2(80, 0)))
-                        ImGui::CloseCurrentPopup();
-                ImGui::EndPopup();
         }
         if (ImGui::BeginPopupModal("About", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::Text(APP_TITLE);
