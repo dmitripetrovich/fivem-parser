@@ -17,16 +17,7 @@ extern "C" {
 #include "util.h"
 }
 
-struct ColorSeg {
-        std::string text;
-        ImVec4 color;
-};
-
-struct ChatLine {
-        std::string timestamp;
-        std::string plain;
-        std::vector<ColorSeg> segments;
-};
+#include "chat.h"
 
 static char s_path[MAX_PATH * 2] = "";
 static bool s_remove_ts = false;
@@ -43,80 +34,11 @@ static std::string s_regex_error;
 
 static bool s_open_about = false;
 
-static ImVec4 color_palette(int code) {
-        switch (code) {
-                case 0: return ImVec4(1.00f, 1.00f, 1.00f, 1.0f);
-                case 1: return ImVec4(1.00f, 0.20f, 0.20f, 1.0f);
-                case 2: return ImVec4(0.20f, 1.00f, 0.20f, 1.0f);
-                case 3: return ImVec4(1.00f, 1.00f, 0.20f, 1.0f);
-                case 4: return ImVec4(0.30f, 0.55f, 1.00f, 1.0f);
-                case 5: return ImVec4(0.20f, 1.00f, 1.00f, 1.0f);
-                case 6: return ImVec4(1.00f, 0.30f, 1.00f, 1.0f);
-                case 7: return ImVec4(1.00f, 1.00f, 1.00f, 1.0f);
-                case 8: return ImVec4(0.75f, 0.15f, 0.15f, 1.0f);
-                case 9: return ImVec4(0.55f, 0.55f, 0.55f, 1.0f);
-                default: return ImVec4(1.00f, 1.00f, 1.00f, 1.0f);
-        }
-}
+static int s_pending_delete = -1;
+static int s_edit_line = -1;
+static bool s_open_edit_popup = false;
+static char s_edit_buf[1024] = "";
 
-static std::vector<ColorSeg> parse_segments(const char *raw) {
-        std::vector<ColorSeg> segs;
-        segs.reserve(8);
-        ImVec4 color(1.0f, 1.0f, 1.0f, 1.0f);
-        std::string cur;
-        cur.reserve(128);
-        for (int i = 0; raw[i]; i++) {
-                if (raw[i] == '^' && raw[i + 1]) {
-                        char nx = raw[i + 1];
-                        if (nx == '#') {
-                                int k = i + 2, h = 0;
-                                while (raw[k] && h < 6 && isxdigit((unsigned char)raw[k])) {
-                                        h++; k++;
-                                }
-                                if (h == 6) {
-                                        if (!cur.empty()) { segs.push_back({std::move(cur), color}); cur.reserve(128); }
-                                        char hex[7];
-                                        memcpy(hex, raw + i + 2, 6);
-                                        hex[6] = '\0';
-                                        unsigned v;
-                                        sscanf(hex, "%x", &v);
-                                        color = ImVec4(((v >> 16) & 0xFF) / 255.0f, ((v >> 8) & 0xFF) / 255.0f, (v & 0xFF) / 255.0f, 1.0f);
-                                        i = k - 1;
-                                        continue;
-                                }
-                        }
-                        if (nx >= '0' && nx <= '9') {
-                                if (!cur.empty()) { segs.push_back({std::move(cur), color}); cur.reserve(128); }
-                                color = color_palette(nx - '0');
-                                i++;
-                                continue;
-                        }
-                        if (nx == 'r' || nx == '~') {
-                                if (!cur.empty()) { segs.push_back({std::move(cur), color}); cur.reserve(128); }
-                                color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-                                i++;
-                                continue;
-                        }
-                        if (nx == '*' || nx == '_') {
-                                i++;
-                                continue;
-                        }
-                }
-                if (raw[i] == '~') {
-                        int k = i + 1;
-                        while (raw[k] && raw[k] != '~')
-                                k++;
-                        if (raw[k] == '~') {
-                                i = k;
-                                continue;
-                        }
-                }
-                cur += raw[i];
-        }
-        if (!cur.empty())
-                segs.push_back({std::move(cur), color});
-        return segs;
-}
 
 static void render_chat_line(const ChatLine &line) {
         bool has_prev = false;
@@ -256,6 +178,23 @@ static void apply_filter(void) {
                 s_flt_chars += s_chat[idx].plain.size() + s_chat[idx].timestamp.size() + 3;
 }
 
+static void delete_chat_line(int idx) {
+        if (idx < 0 || idx >= (int)s_chat.size()) return;
+        s_chat.erase(s_chat.begin() + idx);
+        s_total_chars = 0;
+        for (auto &l : s_chat)
+                s_total_chars += l.plain.size() + l.timestamp.size() + 3;
+        for (int j = (int)s_flt_indices.size() - 1; j >= 0; j--) {
+                if (s_flt_indices[j] == idx)
+                        s_flt_indices.erase(s_flt_indices.begin() + j);
+                else if (s_flt_indices[j] > idx)
+                        s_flt_indices[j]--;
+        }
+        s_flt_chars = 0;
+        for (int k : s_flt_indices)
+                s_flt_chars += s_chat[k].plain.size() + s_chat[k].timestamp.size() + 3;
+}
+
 static void do_find_latest(GLFWwindow *w) {
         char path[MAX_PATH * 2];
         if (!find_latest_log(path, sizeof(path))) {
@@ -299,6 +238,7 @@ static void do_parse(GLFWwindow *w) {
                 ChatEntry *e = &log->entries[i];
                 ChatLine cl;
                 cl.timestamp = e->timestamp;
+                cl.raw = e->raw;
                 cl.plain = e->plain;
                 cl.segments = parse_segments(e->raw);
                 s_total_chars += strlen(e->plain) + strlen(e->timestamp) + 3;
@@ -348,6 +288,28 @@ static void do_save(GLFWwindow *w, const std::string &text, const char *default_
 static void do_copy(GLFWwindow *w, const std::string &text) {
         if (!text.empty())
                 glfwSetClipboardString(w, text.c_str());
+}
+
+static void do_export_png(GLFWwindow *w, const std::vector<ChatLine> &lines) {
+        if (lines.empty()) {
+                MessageBoxA(glfwGetWin32Window(w), "Nothing to export - parse a log first.", "Empty", MB_ICONINFORMATION);
+                return;
+        }
+        OPENFILENAMEA ofn = {};
+        char fname[MAX_PATH] = "chat_log.png";
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = glfwGetWin32Window(w);
+        ofn.lpstrFilter = "PNG Image (*.png)\0*.png\0All Files\0*.*\0";
+        ofn.lpstrFile = fname;
+        ofn.nMaxFile = MAX_PATH;
+        ofn.Flags = OFN_OVERWRITEPROMPT;
+        ofn.lpstrDefExt = "png";
+        if (!GetSaveFileNameA(&ofn)) return;
+        if (export_chat_png(fname, lines)) {
+                MessageBoxA(glfwGetWin32Window(w), "PNG exported successfully.", "Exported", MB_ICONINFORMATION);
+        } else {
+                MessageBoxA(glfwGetWin32Window(w), "Failed to export PNG.\n\nArial font was not found on this system.", "Error", MB_ICONERROR);
+        }
 }
 
 void ui_init(GLFWwindow *w) {
@@ -404,17 +366,67 @@ void ui_render(GLFWwindow *w) {
                 ImGuiListClipper clipper;
                 clipper.Begin((int)s_chat.size());
                 while (clipper.Step()) {
-                        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
+                        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
+                                ImGui::PushID(i);
+                                ImGui::BeginGroup();
                                 render_chat_line(s_chat[i]);
+                                ImGui::EndGroup();
+                                if (ImGui::BeginPopupContextItem("##ctx", ImGuiPopupFlags_MouseButtonRight)) {
+                                        if (ImGui::MenuItem("Edit Line")) {
+                                                s_edit_line = i;
+                                                strncpy(s_edit_buf, s_chat[i].raw.c_str(), sizeof(s_edit_buf) - 1);
+                                                s_edit_buf[sizeof(s_edit_buf) - 1] = '\0';
+                                                s_open_edit_popup = true;
+                                        }
+                                        if (ImGui::MenuItem("Delete Line"))
+                                                s_pending_delete = i;
+                                        ImGui::EndPopup();
+                                }
+                                ImGui::PopID();
+                        }
                 }
         }
         ImGui::EndChild();
+        if (s_pending_delete >= 0) {
+                delete_chat_line(s_pending_delete);
+                s_pending_delete = -1;
+        }
+        if (s_open_edit_popup) {
+                ImGui::OpenPopup("Edit Line");
+                s_open_edit_popup = false;
+        }
+        if (ImGui::BeginPopupModal("Edit Line", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::SetNextItemWidth(500);
+                ImGui::InputText("##ei", s_edit_buf, sizeof(s_edit_buf));
+                ImGui::Spacing();
+                if (ImGui::Button("Apply", ImVec2(100, 0))) {
+                        if (s_edit_line >= 0 && s_edit_line < (int)s_chat.size()) {
+                                ChatLine &cl = s_chat[s_edit_line];
+                                cl.raw = s_edit_buf;
+                                cl.segments = parse_segments(s_edit_buf);
+                                cl.plain.clear();
+                                for (auto &seg : cl.segments) cl.plain += seg.text;
+                                s_total_chars = 0;
+                                for (auto &l : s_chat) s_total_chars += l.plain.size() + l.timestamp.size() + 3;
+                                s_flt_chars = 0;
+                                for (int k : s_flt_indices) s_flt_chars += s_chat[k].plain.size() + s_chat[k].timestamp.size() + 3;
+                        }
+                        s_edit_line = -1;
+                        ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+                        s_edit_line = -1;
+                        ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+        }
         ImGui::Text("%u characters  |  %u messages", (unsigned)s_total_chars, (unsigned)s_chat.size());
         ImGui::Checkbox("Remove timestamps", &s_remove_ts);
         ImGui::SameLine();
-        float bw = 72;
+        float bw = 72, bw_exp = 92;
         float sp = ImGui::GetStyle().ItemSpacing.x;
-        float total = bw * 3 + sp * 2;
+        float total = bw * 3 + bw_exp + sp * 3;
         ImGui::SameLine(ImGui::GetWindowWidth() - total - ImGui::GetStyle().WindowPadding.x);
         if (ImGui::Button("PARSE", ImVec2(bw, 0)))
                 do_parse(w);
@@ -428,6 +440,9 @@ void ui_render(GLFWwindow *w) {
                 std::string plain = build_plain(s_chat);
                 do_copy(w, plain);
         }
+        ImGui::SameLine();
+        if (ImGui::Button("EXPORT PNG", ImVec2(bw_exp, 0)))
+                do_export_png(w, s_chat);
         if (s_open_about) {
                 ImGui::OpenPopup("About");
                 s_open_about = false;
@@ -477,16 +492,37 @@ void ui_render(GLFWwindow *w) {
                                 ImGuiListClipper clipper;
                                 clipper.Begin((int)s_flt_indices.size());
                                 while (clipper.Step()) {
-                                        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
-                                                render_chat_line(s_chat[s_flt_indices[i]]);
+                                        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
+                                                int chat_idx = s_flt_indices[i];
+                                                ImGui::PushID(i);
+                                                ImGui::BeginGroup();
+                                                render_chat_line(s_chat[chat_idx]);
+                                                ImGui::EndGroup();
+                                                if (ImGui::BeginPopupContextItem("##fctx", ImGuiPopupFlags_MouseButtonRight)) {
+                                                        if (ImGui::MenuItem("Edit Line")) {
+                                                                s_edit_line = chat_idx;
+                                                                strncpy(s_edit_buf, s_chat[chat_idx].raw.c_str(), sizeof(s_edit_buf) - 1);
+                                                                s_edit_buf[sizeof(s_edit_buf) - 1] = '\0';
+                                                                s_open_edit_popup = true;
+                                                        }
+                                                        if (ImGui::MenuItem("Delete Line"))
+                                                                s_pending_delete = chat_idx;
+                                                        ImGui::EndPopup();
+                                                }
+                                                ImGui::PopID();
+                                        }
                                 }
                         }
                         ImGui::EndChild();
+                        if (s_pending_delete >= 0) {
+                                delete_chat_line(s_pending_delete);
+                                s_pending_delete = -1;
+                        }
                         ImGui::Text("%u characters and %u lines", (unsigned)s_flt_chars, (unsigned)s_flt_indices.size());
                         ImGui::SameLine();
                         float fw = 90;
                         float fsp = ImGui::GetStyle().ItemSpacing.x;
-                        ImGui::SameLine(ImGui::GetWindowWidth() - fw * 2 - fsp - ImGui::GetStyle().WindowPadding.x);
+                        ImGui::SameLine(ImGui::GetWindowWidth() - fw * 3 - fsp * 2 - ImGui::GetStyle().WindowPadding.x);
                         if (ImGui::Button("SAVE AS##flt", ImVec2(fw, 0))) {
                                 std::string plain = build_plain_indices(s_flt_indices);
                                 do_save(w, plain, "filtered_chat.txt");
@@ -495,6 +531,14 @@ void ui_render(GLFWwindow *w) {
                         if (ImGui::Button("COPY##flt", ImVec2(fw, 0))) {
                                 std::string plain = build_plain_indices(s_flt_indices);
                                 do_copy(w, plain);
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("EXPORT PNG##flt", ImVec2(fw, 0))) {
+                                std::vector<ChatLine> flt_lines;
+                                flt_lines.reserve(s_flt_indices.size());
+                                for (int idx : s_flt_indices)
+                                        flt_lines.push_back(s_chat[idx]);
+                                do_export_png(w, flt_lines);
                         }
                 }
                 ImGui::End();

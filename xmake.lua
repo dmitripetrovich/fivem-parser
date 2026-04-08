@@ -1,5 +1,5 @@
 set_project("fivem-parser")
-set_version("1.0.3")
+set_version("1.0.4")
 
 set_plat("mingw")
 set_arch("x86_64")
@@ -21,6 +21,7 @@ end
 local ROOT = os.projectdir()
 local V_GLFW = ("%s/vendor/glfw"):format(ROOT)
 local V_IMGUI = ("%s/vendor/imgui"):format(ROOT)
+local V_STB = ("%s/vendor/stb"):format(ROOT)
 
 target("glfw")
         set_kind("static")
@@ -40,7 +41,7 @@ target("Parser")
         set_kind("binary")
         set_group("app")
         add_files("*.c", "*.cpp")
-        add_includedirs(("%s/include"):format(V_GLFW), V_IMGUI, ("%s/backends"):format(V_IMGUI))
+        add_includedirs(("%s/include"):format(V_GLFW), V_IMGUI, ("%s/backends"):format(V_IMGUI), V_STB)
         add_deps("glfw", "imgui")
         add_ldflags("-mwindows", "-static", {force = true})
         add_syslinks("opengl32", "gdi32", "user32", "kernel32", "comdlg32", "shell32", "dwmapi")
