@@ -9,6 +9,7 @@ extern "C" {
 typedef struct {
         int remove_timestamps;
         int wrap_width;
+        int png_bg_r, png_bg_g, png_bg_b, png_bg_a;
 } Config;
 
 extern Config g_config;

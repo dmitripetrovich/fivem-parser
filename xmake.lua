@@ -1,5 +1,5 @@
 set_project("fivem-parser")
-set_version("1.0.6")
+set_version("1.0.7")
 
 set_plat("mingw")
 set_arch("x86_64")

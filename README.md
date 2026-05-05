@@ -18,11 +18,11 @@ xmake
 
 ## Setup
 
-To be able to parse a session's chat messages, the server must be running the included `parser` resource. This is addon that simply logs chat messages to the client's log file, which the parser then reads.
+To be able to parse a session's chat messages, the server must be running the included `fivem-parser` resource. This is addon that simply logs chat messages to the client's log file, which the parser then reads.
 
 1. Download or clone the repository with `git clone https://github.com/bd53/fivem-parser`.
-2. Copy `resources/parser` folder into the `resources/` directory.
-3. Add `ensure parser` to where resources are being loaded (after chat resource).
+2. Copy `resources/fivem-parser` folder into the `resources/` directory.
+3. Add `ensure fivem-parser` to where resources are being loaded (after chat resource).
 
 This removes the need for any modifications to your chat resource.
 

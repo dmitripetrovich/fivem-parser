@@ -1,6 +1,6 @@
 local parsingEnabled = false
 
-RegisterNetEvent('parser:setState', function(state)
+RegisterNetEvent('fivem-parser:setState', function(state)
         if type(state) ~= 'boolean' then return end
         parsingEnabled = state
 end)

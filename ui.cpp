@@ -45,6 +45,17 @@ static std::vector<bool> s_bulk_sel;
 static bool s_flt_bulk_select_mode = false;
 static std::vector<bool> s_flt_bulk_sel;
 
+static float s_png_bg[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+static bool s_show_find = false;
+static bool s_find_just_opened = false;
+static char s_find_buf[256] = "";
+static int s_find_result = -1;
+static bool s_find_need_scroll = false;
+
+static char s_flt_ts_start[16] = "";
+static char s_flt_ts_end[16] = "";
+
 static void render_chat_line(const ChatLine &line) {
         ImFont *font = ImGui::GetFont();
         const float font_size = ImGui::GetFontSize();
@@ -83,7 +94,7 @@ static void render_chat_line(const ChatLine &line) {
                         p = word_end;
                 }
         };
-        if (!line.timestamp.empty()) {
+        if (!s_remove_ts && !line.timestamp.empty()) {
                 std::string ts = line.timestamp + " ";
                 process_span(ts.c_str(), IM_COL32(140, 140, 140, 255));
         }
@@ -96,7 +107,7 @@ static std::string build_plain(const std::vector<ChatLine> &lines) {
         std::string out;
         out.reserve(s_total_chars);
         for (auto &l : lines) {
-                if (!l.timestamp.empty()) { out += l.timestamp; out += ' '; }
+                if (!s_remove_ts && !l.timestamp.empty()) { out += l.timestamp; out += ' '; }
                 out += l.plain;
                 out += "\r\n";
         }
@@ -108,7 +119,7 @@ static std::string build_plain_indices(const std::vector<int> &indices) {
         out.reserve(s_flt_chars);
         for (int idx : indices) {
                 auto &l = s_chat[idx];
-                if (!l.timestamp.empty()) { out += l.timestamp; out += ' '; }
+                if (!s_remove_ts && !l.timestamp.empty()) { out += l.timestamp; out += ' '; }
                 out += l.plain;
                 out += "\r\n";
         }
@@ -124,6 +135,14 @@ static bool match_line(const char *text, const std::string &kw, bool use_regex, 
                 }
         }
         return stristr(text, kw.c_str()) != NULL;
+}
+
+static int parse_time_secs(const char *s) {
+        if (!s || !s[0]) return -1;
+        int h = 0, m = 0, sec = 0;
+        if (sscanf(s, "%d:%d:%d", &h, &m, &sec) >= 2)
+                return h * 3600 + m * 60 + sec;
+        return -1;
 }
 
 static void apply_filter(void) {
@@ -212,6 +231,20 @@ static void apply_filter(void) {
                         s_flt_indices.push_back(i);
                 }
         }
+        int ts_s = parse_time_secs(s_flt_ts_start);
+        int ts_e = parse_time_secs(s_flt_ts_end);
+        if (ts_s >= 0 || ts_e >= 0) {
+                s_flt_indices.erase(
+                        std::remove_if(s_flt_indices.begin(), s_flt_indices.end(), [&](int idx) {
+                                int t = parse_time_secs(s_chat[idx].timestamp.c_str());
+                                if (t < 0) return false;
+                                if (ts_s >= 0 && t < ts_s) return true;
+                                if (ts_e >= 0 && t > ts_e) return true;
+                                return false;
+                        }),
+                        s_flt_indices.end()
+                );
+        }
         for (int idx : s_flt_indices)
                 s_flt_chars += s_chat[idx].plain.size() + s_chat[idx].timestamp.size() + 3;
 }
@@ -264,7 +297,7 @@ static void do_parse(GLFWwindow *w) {
                 MessageBoxA(glfwGetWin32Window(w), "Please select or auto-detect a log file first.", "Error", MB_ICONWARNING);
                 return;
         }
-        ChatLog *log = parse_log_chat(s_path, s_remove_ts ? 1 : 0);
+        ChatLog *log = parse_log_chat(s_path, 0);
         if (!log) {
                 MessageBoxA(glfwGetWin32Window(w), "Failed to open log file.\n\n" "Make sure FiveM has been launched at least once " "and the file exists at the specified path.", "Error", MB_ICONERROR);
                 return;
@@ -286,6 +319,7 @@ static void do_parse(GLFWwindow *w) {
         s_chat = std::move(tmp);
         s_bulk_select_mode = false;
         s_bulk_sel.clear();
+        s_find_result = -1;
         s_flt_indices.clear();
         s_flt_indices.shrink_to_fit();
         s_flt_chars = 0;
@@ -345,7 +379,7 @@ static void do_export_png(GLFWwindow *w, const std::vector<ChatLine> &lines) {
         ofn.Flags = OFN_OVERWRITEPROMPT;
         ofn.lpstrDefExt = "png";
         if (!GetSaveFileNameA(&ofn)) return;
-        if (export_chat_png(fname, lines, g_config.wrap_width)) {
+        if (export_chat_png(fname, lines, g_config.wrap_width, !s_remove_ts, s_png_bg[0], s_png_bg[1], s_png_bg[2], s_png_bg[3])) {
                 MessageBoxA(glfwGetWin32Window(w), "PNG exported successfully.", "Exported", MB_ICONINFORMATION);
         } else {
                 MessageBoxA(glfwGetWin32Window(w), "Failed to export PNG.\n\nArial font was not found on this system.", "Error", MB_ICONERROR);
@@ -355,6 +389,10 @@ static void do_export_png(GLFWwindow *w, const std::vector<ChatLine> &lines) {
 void ui_init(GLFWwindow *w) {
         (void)w;
         s_remove_ts = (g_config.remove_timestamps != 0);
+        s_png_bg[0] = g_config.png_bg_r / 255.0f;
+        s_png_bg[1] = g_config.png_bg_g / 255.0f;
+        s_png_bg[2] = g_config.png_bg_b / 255.0f;
+        s_png_bg[3] = g_config.png_bg_a / 255.0f;
         char path[MAX_PATH * 2];
         if (find_latest_log(path, sizeof(path)))
                 snprintf(s_path, sizeof(s_path), "%s", path);
@@ -400,11 +438,50 @@ void ui_render(GLFWwindow *w) {
         ImGui::SameLine();
         if (ImGui::Button("Find Latest", ImVec2(85, 0)))
                 do_find_latest(w);
+        {
+                ImGuiIO &io = ImGui::GetIO();
+                if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+                        s_show_find = !s_show_find;
+                        if (s_show_find) s_find_just_opened = true;
+                        else s_find_result = -1;
+                }
+        }
+        if (s_show_find) {
+                ImGui::Text("Find:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(250);
+                if (s_find_just_opened) { ImGui::SetKeyboardFocusHere(); s_find_just_opened = false; }
+                bool enter = ImGui::InputText("##findbar", s_find_buf, sizeof(s_find_buf), ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine();
+                if ((ImGui::Button("Find##findbtn") || enter) && s_find_buf[0] && !s_chat.empty()) {
+                        int n = (int)s_chat.size();
+                        int start = (s_find_result >= 0) ? (s_find_result + 1) % n : 0;
+                        s_find_result = -1;
+                        for (int i = 0; i < n; i++) {
+                                int idx = (start + i) % n;
+                                if (stristr(s_chat[idx].plain.c_str(), s_find_buf)) {
+                                        s_find_result = idx;
+                                        s_find_need_scroll = true;
+                                        break;
+                                }
+                        }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("X##closefind")) {
+                        s_show_find = false;
+                        s_find_result = -1;
+                }
+                if (s_find_result < 0 && s_find_buf[0]) {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(no match)");
+                }
+        }
         float footer = ImGui::GetFrameHeightWithSpacing() * 2 + 8;
         ImGui::BeginChild("##output", ImVec2(0, -footer), ImGuiChildFlags_Borders);
         if (!s_chat.empty()) {
                 for (int i = 0; i < (int)s_chat.size(); i++) {
                         ImGui::PushID(i);
+                        ImVec2 row_top = ImGui::GetCursorScreenPos();
                         if (s_bulk_select_mode && i < (int)s_bulk_sel.size()) {
                                 bool chk = s_bulk_sel[i];
                                 ImGui::Checkbox("##chk", &chk);
@@ -414,6 +491,20 @@ void ui_render(GLFWwindow *w) {
                         ImGui::BeginGroup();
                         render_chat_line(s_chat[i]);
                         ImGui::EndGroup();
+                        if (i == s_find_result) {
+                                ImVec2 row_bot = ImGui::GetCursorScreenPos();
+                                ImVec2 wpos = ImGui::GetWindowPos();
+                                float rw = ImGui::GetWindowWidth();
+                                ImGui::GetWindowDrawList()->AddRectFilled(
+                                        ImVec2(wpos.x, row_top.y),
+                                        ImVec2(wpos.x + rw, row_bot.y),
+                                        IM_COL32(255, 220, 0, 50)
+                                );
+                                if (s_find_need_scroll) {
+                                        ImGui::SetScrollHereY(0.5f);
+                                        s_find_need_scroll = false;
+                                }
+                        }
                         if (!s_bulk_select_mode && ImGui::BeginPopupContextItem("##ctx", ImGuiPopupFlags_MouseButtonRight)) {
                                 if (ImGui::MenuItem("Edit Line")) {
                                         s_edit_line = i;
@@ -511,9 +602,9 @@ void ui_render(GLFWwindow *w) {
                         if (g_config.wrap_width > 2000) g_config.wrap_width = 2000;
                 }
                 ImGui::SameLine();
-                float bw = 72, bw_exp = 92;
+                float bw = 72, bw_exp = 92, bg_btn = 20;
                 float sp = ImGui::GetStyle().ItemSpacing.x;
-                float total = bw * 3 + bw_exp + sp * 3;
+                float total = bw * 3 + bw_exp + bg_btn + sp * 4;
                 ImGui::SameLine(ImGui::GetWindowWidth() - total - ImGui::GetStyle().WindowPadding.x);
                 if (ImGui::Button("PARSE", ImVec2(bw, 0)))
                         do_parse(w);
@@ -526,6 +617,21 @@ void ui_render(GLFWwindow *w) {
                 if (ImGui::Button("COPY", ImVec2(bw, 0))) {
                         std::string plain = build_plain(s_chat);
                         do_copy(w, plain);
+                }
+                ImGui::SameLine();
+                {
+                        ImVec4 bg_col(s_png_bg[0], s_png_bg[1], s_png_bg[2], s_png_bg[3]);
+                        if (ImGui::ColorButton("##pngbg", bg_col, ImGuiColorEditFlags_AlphaPreview | ImGuiColorEditFlags_NoTooltip, ImVec2(bg_btn, ImGui::GetFrameHeight()))) ImGui::OpenPopup("##pngbg_popup");
+                        if (ImGui::BeginPopup("##pngbg_popup")) {
+                                ImGui::Text("PNG Background");
+                                if (ImGui::ColorPicker4("##bgpicker", s_png_bg, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreview)) {
+                                        g_config.png_bg_r = (int)(s_png_bg[0] * 255.0f + 0.5f);
+                                        g_config.png_bg_g = (int)(s_png_bg[1] * 255.0f + 0.5f);
+                                        g_config.png_bg_b = (int)(s_png_bg[2] * 255.0f + 0.5f);
+                                        g_config.png_bg_a = (int)(s_png_bg[3] * 255.0f + 0.5f);
+                                }
+                                ImGui::EndPopup();
+                        }
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("EXPORT PNG", ImVec2(bw_exp, 0)))
@@ -565,6 +671,8 @@ void ui_render(GLFWwindow *w) {
                         ImGui::SameLine();
                         if (ImGui::Button("CLEAR", ImVec2(90, 0))) {
                                 s_kw_buf[0] = '\0';
+                                s_flt_ts_start[0] = '\0';
+                                s_flt_ts_end[0] = '\0';
                                 s_regex_error.clear();
                                 s_flt_indices.clear();
                                 for (int i = 0; i < (int)s_chat.size(); i++)
@@ -573,6 +681,17 @@ void ui_render(GLFWwindow *w) {
                         }
                         ImGui::SameLine();
                         ImGui::Checkbox("Regex", &s_use_regex);
+                        ImGui::Text("Time:");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(75);
+                        ImGui::InputText("##ts_start", s_flt_ts_start, sizeof(s_flt_ts_start));
+                        ImGui::SameLine();
+                        ImGui::Text("to");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(75);
+                        ImGui::InputText("##ts_end", s_flt_ts_end, sizeof(s_flt_ts_end));
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("HH:MM:SS");
                         if (!s_regex_error.empty()) {
                                 ImGui::SameLine();
                                 ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", s_regex_error.c_str());

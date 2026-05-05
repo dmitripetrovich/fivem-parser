@@ -27,6 +27,10 @@ void config_load(void) {
         g_config.wrap_width = GetPrivateProfileIntA("General", "WrapWidth", 500, ini);
         if (g_config.wrap_width < 100) g_config.wrap_width = 100;
         if (g_config.wrap_width > 2000) g_config.wrap_width = 2000;
+        g_config.png_bg_r = GetPrivateProfileIntA("General", "PngBgR", 0, ini);
+        g_config.png_bg_g = GetPrivateProfileIntA("General", "PngBgG", 0, ini);
+        g_config.png_bg_b = GetPrivateProfileIntA("General", "PngBgB", 0, ini);
+        g_config.png_bg_a = GetPrivateProfileIntA("General", "PngBgA", 0, ini);
 }
 
 void config_save(void) {
@@ -37,4 +41,12 @@ void config_save(void) {
         WritePrivateProfileStringA("General", "RemoveTimestamps", buf, ini);
         snprintf(buf, sizeof(buf), "%d", g_config.wrap_width);
         WritePrivateProfileStringA("General", "WrapWidth", buf, ini);
+        snprintf(buf, sizeof(buf), "%d", g_config.png_bg_r);
+        WritePrivateProfileStringA("General", "PngBgR", buf, ini);
+        snprintf(buf, sizeof(buf), "%d", g_config.png_bg_g);
+        WritePrivateProfileStringA("General", "PngBgG", buf, ini);
+        snprintf(buf, sizeof(buf), "%d", g_config.png_bg_b);
+        WritePrivateProfileStringA("General", "PngBgB", buf, ini);
+        snprintf(buf, sizeof(buf), "%d", g_config.png_bg_a);
+        WritePrivateProfileStringA("General", "PngBgA", buf, ini);
 }
