@@ -4,7 +4,7 @@ game 'gta5'
 name 'parser'
 author 'bd53'
 description 'A chat log assistant for FiveM.'
-version '1.0.7'
+version '1.0.8'
 repository 'https://github.com/bd53/fivem-parser'
 license 'MIT'
 

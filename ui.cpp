@@ -67,9 +67,9 @@ static void render_chat_line(const ChatLine &line) {
         const float start_x = item_pos.x;
         const float wrap_limit = (avail_w < (float)g_config.wrap_width) ? avail_w : (float)g_config.wrap_width;
         const float max_x = start_x + wrap_limit;
-        const float scroll_y = ImGui::GetScrollY();
+        const ImVec2 win_pos = ImGui::GetWindowPos();
         const float win_h = ImGui::GetWindowHeight();
-        const bool should_draw = (item_pos.y < scroll_y + win_h + line_h) && (item_pos.y > scroll_y - win_h);
+        const bool should_draw = (item_pos.y < win_pos.y + win_h + line_h) && (item_pos.y > win_pos.y - line_h);
         ImDrawList *dl = should_draw ? ImGui::GetWindowDrawList() : nullptr;
         float pen_x = start_x;
         float pen_y = item_pos.y;
