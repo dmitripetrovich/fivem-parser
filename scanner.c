@@ -260,7 +260,7 @@ void scanner_stop(void) {
         s_thread = NULL;
 }
 
-int scanner_is_running(void) {s
+int scanner_is_running(void) {
         return is_running();
 }
 
