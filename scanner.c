@@ -10,8 +10,11 @@
 #define DEDUP_CAP 16384
 #define DEDUP_MASK (DEDUP_CAP - 1)
 #define READ_BUF_SIZE (64 * 1024)
-#define MARKER "ON_MESSAGE"
-#define MARKER_LEN 10
+#define NUM_MARKERS 2
+static const char *MARKERS[] = { "ON_MESSAGE", "FUNC::CHAT::ADD_MESSAGE" };
+static const int MARKER_LENS[] = { 10, 23 };
+#define MIN_MARKER_LEN 10
+#define MAX_MARKER_LEN 23
 #define MAX_HOTSPOTS 256
 #define FULL_SCAN_EVERY 60
 #define FAST_INTERVAL_MS 800
@@ -164,6 +167,20 @@ static const unsigned char *find_bytes(const unsigned char *hay, size_t hay_len,
                 remaining -= skip;
         }
         return NULL;
+}
+
+static const unsigned char *find_any_marker(const unsigned char *hay, size_t hay_len, int *match_len) {
+        const unsigned char *earliest = NULL;
+        *match_len = 0;
+        for (int i = 0; i < NUM_MARKERS; i++) {
+                if (hay_len < (size_t)MARKER_LENS[i]) continue;
+                const unsigned char *f = find_bytes(hay, hay_len, (const unsigned char *)MARKERS[i], MARKER_LENS[i]);
+                if (f && (!earliest || f < earliest)) {
+                        earliest = f;
+                        *match_len = MARKER_LENS[i];
+                }
+        }
+        return earliest;
 }
 
 static int decode_hex4(const char *p, const char *end, unsigned *out) {
@@ -332,12 +349,13 @@ static int scan_one_region(HANDLE proc, unsigned char *base, size_t region_size,
                         break;
                 const unsigned char *p = buf;
                 size_t remaining = bytes_read;
-                while (remaining >= MARKER_LEN) {
-                        const unsigned char *f = find_bytes(p, remaining, (const unsigned char *)MARKER, MARKER_LEN);
+                int mlen;
+                while (remaining >= MIN_MARKER_LEN) {
+                        const unsigned char *f = find_any_marker(p, remaining, &mlen);
                         if (!f) break;
                         found = 1;
                         size_t match_off = (size_t)(f - buf);
-                        size_t ctx_end = match_off + MARKER_LEN + 2048;
+                        size_t ctx_end = match_off + mlen + 2048;
                         if (ctx_end > bytes_read) ctx_end = bytes_read;
                         const char *region = (const char *)(buf + match_off);
                         int region_len = (int)(ctx_end - match_off);
@@ -357,12 +375,12 @@ static int scan_one_region(HANDLE proc, unsigned char *base, size_t region_size,
                                                 enqueue(&msg);
                                 }
                         }
-                        size_t advance = (size_t)(f - p) + MARKER_LEN;
+                        size_t advance = (size_t)(f - p) + mlen;
                         p += advance;
                         remaining -= advance;
                 }
                 if (to_read == READ_BUF_SIZE && offset + to_read < region_size)
-                        offset += to_read - MARKER_LEN;
+                        offset += to_read - MAX_MARKER_LEN;
                 else
                         offset += to_read;
         }
@@ -400,7 +418,7 @@ static void scan_cached(HANDLE proc, unsigned char *buf) {
 
 static DWORD WINAPI scanner_thread(LPVOID param) {
         (void)param;
-        unsigned char *buf = (unsigned char *)malloc(READ_BUF_SIZE + MARKER_LEN);
+        unsigned char *buf = (unsigned char *)malloc(READ_BUF_SIZE + MAX_MARKER_LEN);
         if (!buf) return 1;
         DWORD cached_pid = 0;
         HANDLE cached_proc = NULL;

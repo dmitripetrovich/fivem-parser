@@ -735,7 +735,7 @@ void ui_render(GLFWwindow *w) {
         }
         if (ImGui::BeginPopupModal("About", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::Text("fivem-parser");
-                ImGui::Text("Version 1.1.1");
+                ImGui::Text("Version 1.1.2");
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();

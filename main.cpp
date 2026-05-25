@@ -32,7 +32,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int nShow) {
         }
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
-        GLFWwindow *window = glfwCreateWindow(800, 500, "fivem-parser v1.1.1", NULL, NULL);
+        GLFWwindow *window = glfwCreateWindow(800, 500, "fivem-parser v1.1.2", NULL, NULL);
         if (!window) {
                 glfwTerminate();
                 CloseHandle(mutex);
