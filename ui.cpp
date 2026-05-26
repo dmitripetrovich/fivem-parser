@@ -121,6 +121,7 @@ static bool s_find_need_scroll = false;
 static bool s_show_ts = true;
 static bool s_live_mode = false;
 static bool s_live_scroll = false;
+static char s_path[MAX_PATH * 2] = "";
 
 static std::vector<float> s_line_heights;
 static float s_cache_avail_w = 0.0f;
@@ -391,6 +392,88 @@ static void do_copy(GLFWwindow *w, const std::string &text) {
                 glfwSetClipboardString(w, text.c_str());
 }
 
+static void do_browse(GLFWwindow *w) {
+        OPENFILENAMEA ofn = {};
+        char fname[MAX_PATH] = "";
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = glfwGetWin32Window(w);
+        ofn.lpstrFilter = "Log Files (*.log)\0*.log\0All Files\0*.*\0";
+        ofn.lpstrFile = fname;
+        ofn.nMaxFile = MAX_PATH;
+        ofn.Flags = OFN_FILEMUSTEXIST;
+        ofn.lpstrTitle = "Select Session";
+        if (GetOpenFileNameA(&ofn))
+                snprintf(s_path, sizeof(s_path), "%s", fname);
+}
+
+static void do_parse_log(GLFWwindow *w) {
+        if (!s_path[0]) {
+                MessageBoxA(glfwGetWin32Window(w), "Please select a log file first.", "Error", MB_ICONWARNING);
+                return;
+        }
+        FILE *f = fopen(s_path, "r");
+        if (!f) {
+                MessageBoxA(glfwGetWin32Window(w), "Failed to open log file.", "Error", MB_ICONERROR);
+                return;
+        }
+        if (s_live_mode) {
+                scanner_stop();
+                s_live_mode = false;
+        }
+        s_chat.clear();
+        s_total_chars = 0;
+        s_bulk_select_mode = false;
+        s_bulk_sel.clear();
+        s_find_result = -1;
+        s_flt_indices.clear();
+        s_flt_chars = 0;
+        char line[8192];
+        while (fgets(line, sizeof(line), f)) {
+                char *tag = strstr(line, "[fivem-parser] ");
+                if (!tag) continue;
+                tag += 15;
+                size_t len = strlen(tag);
+                while (len > 0 && (tag[len - 1] == '\n' || tag[len - 1] == '\r'))
+                        tag[--len] = '\0';
+                if (!len) continue;
+                ChatLine cl;
+                cl.timestamp = "";
+                if (line[0] == '[') {
+                        char *end = strchr(line, ']');
+                        if (end && end < tag) {
+                                char numstr[64] = "";
+                                int nlen = (int)(end - line) - 1;
+                                if (nlen > 0 && nlen < (int)sizeof(numstr)) {
+                                        memcpy(numstr, line + 1, (size_t)nlen);
+                                        numstr[nlen] = '\0';
+                                        long ms = atol(numstr);
+                                        if (ms >= 0) {
+                                                long total_sec = ms / 1000;
+                                                int h = (int)(total_sec / 3600);
+                                                int m = (int)((total_sec % 3600) / 60);
+                                                int s = (int)(total_sec % 60);
+                                                char ts[16];
+                                                snprintf(ts, sizeof(ts), "[%02d:%02d:%02d]", h, m, s);
+                                                cl.timestamp = ts;
+                                        }
+                                }
+                        }
+                }
+                cl.raw = tag;
+                char plain_buf[8192];
+                snprintf(plain_buf, sizeof(plain_buf), "%s", tag);
+                strip_color_codes(plain_buf);
+                cl.plain = plain_buf;
+                cl.segments = parse_segments(tag);
+                s_total_chars += cl.plain.size() + 3;
+                s_chat.push_back(std::move(cl));
+        }
+        fclose(f);
+        invalidate_height_cache();
+        if (s_chat.empty())
+                MessageBoxA(glfwGetWin32Window(w), "No [fivem-parser] messages found in log.", "Empty", MB_ICONINFORMATION);
+}
+
 static void do_export_png(GLFWwindow *w, const std::vector<ChatLine> &lines) {
         if (lines.empty()) {
                 MessageBoxA(glfwGetWin32Window(w), "Nothing to export - parse a log first.", "Empty", MB_ICONINFORMATION);
@@ -406,7 +489,7 @@ static void do_export_png(GLFWwindow *w, const std::vector<ChatLine> &lines) {
         ofn.Flags = OFN_OVERWRITEPROMPT;
         ofn.lpstrDefExt = "png";
         if (!GetSaveFileNameA(&ofn)) return;
-        if (export_chat_png(fname, lines, g_config.wrap_width, s_png_bg[0], s_png_bg[1], s_png_bg[2], s_png_bg[3])) {
+        if (export_chat_png(fname, lines, g_config.wrap_width, g_config.png_scale, s_png_bg[0], s_png_bg[1], s_png_bg[2], s_png_bg[3])) {
                 MessageBoxA(glfwGetWin32Window(w), "PNG exported successfully.", "Exported", MB_ICONINFORMATION);
         } else {
                 MessageBoxA(glfwGetWin32Window(w), "Failed to export PNG.\n\nArial font was not found on this system.", "Error", MB_ICONERROR);
@@ -433,8 +516,8 @@ void ui_shutdown(void) {
 
 void ui_render(GLFWwindow *w) {
         if (s_live_mode && scanner_is_running()) {
-                ScannedMsg msgs[64];
-                int n = scanner_poll(msgs, 64);
+                ScannedMsg msgs[1];
+                int n = scanner_poll(msgs, 1);
                 if (n > 0) {
                         SYSTEMTIME st;
                         GetLocalTime(&st);
@@ -472,6 +555,21 @@ void ui_render(GLFWwindow *w) {
                 if (ImGui::MenuItem("About"))
                         s_open_about = true;
                 ImGui::EndMenuBar();
+        }
+        ImGui::Text("Log File:");
+        ImGui::SameLine();
+        {
+                float avail = ImGui::GetContentRegionAvail().x;
+                float browse_w = 75, parse_w = 60;
+                float path_offset = browse_w + parse_w + ImGui::GetStyle().ItemSpacing.x * 2;
+                ImGui::SetNextItemWidth(avail - path_offset);
+                ImGui::InputText("##path", s_path, sizeof(s_path));
+                ImGui::SameLine();
+                if (ImGui::Button("Browse", ImVec2(browse_w, 0)))
+                        do_browse(w);
+                ImGui::SameLine();
+                if (ImGui::Button("Parse", ImVec2(parse_w, 0)))
+                        do_parse_log(w);
         }
         {
                 ImGuiIO &io = ImGui::GetIO();
@@ -722,6 +820,9 @@ void ui_render(GLFWwindow *w) {
                                         g_config.png_bg_b = (int)(s_png_bg[2] * 255.0f + 0.5f);
                                         g_config.png_bg_a = (int)(s_png_bg[3] * 255.0f + 0.5f);
                                 }
+                                ImGui::Separator();
+                                ImGui::Text("PNG Scale (sharpness)");
+                                ImGui::SliderInt("##pngscale", &g_config.png_scale, 1, 3, "%dx");
                                 ImGui::EndPopup();
                         }
                 }
@@ -735,7 +836,7 @@ void ui_render(GLFWwindow *w) {
         }
         if (ImGui::BeginPopupModal("About", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::Text("fivem-parser");
-                ImGui::Text("Version 1.1.2");
+                ImGui::Text("Version 1.1.3");
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();

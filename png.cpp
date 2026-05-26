@@ -12,11 +12,11 @@
 #include <string>
 #include <unordered_map>
 
-static const float FONT_SIZE = 14.0f;
-static const int PAD_X = 10;
-static const int PAD_Y = 6;
-static const int LINE_SPACING = 3;
-static const int OUTLINE_R = 1;
+static const float BASE_FONT_SIZE = 14.0f;
+static const int BASE_PAD_X = 10;
+static const int BASE_PAD_Y = 6;
+static const int BASE_LINE_SPACING = 3;
+static const int BASE_OUTLINE_R = 1;
 
 static bool load_font_file(std::vector<unsigned char> &buf) {
         static const char *candidates[] = { "C:\\Windows\\Fonts\\arialbd.ttf", "C:\\Windows\\Fonts\\arial.ttf", "C:\\Windows\\Fonts\\verdanab.ttf", "C:\\Windows\\Fonts\\verdana.ttf" };
@@ -113,13 +113,13 @@ static void render_string(unsigned char *img, int img_w, int img_h, int *pen_x, 
         }
 }
 
-static void render_string_outlined(unsigned char *img, int img_w, int img_h, int *pen_x, int pen_y, const char *text, int len, float r, float g, float b, stbtt_fontinfo *font, float scale, int ascent) {
+static void render_string_outlined(unsigned char *img, int img_w, int img_h, int *pen_x, int pen_y, const char *text, int len, float r, float g, float b, stbtt_fontinfo *font, float scale, int ascent, int outline_r) {
         int start_x = *pen_x;
         static const int OX[] = {-1, 0, 1, -1, 1, -1, 0, 1};
         static const int OY[] = {-1, -1, -1, 0, 0, 1, 1, 1};
         for (int o = 0; o < 8; o++) {
-                int tmp_x = start_x + OX[o] * OUTLINE_R;
-                render_string(img, img_w, img_h, &tmp_x, pen_y + OY[o] * OUTLINE_R, text, len, 0.0f, 0.0f, 0.0f, 0.85f, font, scale, ascent);
+                int tmp_x = start_x + OX[o] * outline_r;
+                render_string(img, img_w, img_h, &tmp_x, pen_y + OY[o] * outline_r, text, len, 0.0f, 0.0f, 0.0f, 0.85f, font, scale, ascent);
         }
         render_string(img, img_w, img_h, pen_x, pen_y, text, len, r, g, b, 1.0f, font, scale, ascent);
 }
@@ -139,18 +139,26 @@ static int measure_string_width(stbtt_fontinfo *font, float scale, const char *t
         return w;
 }
 
-bool export_chat_png(const char *output_path, const std::vector<ChatLine> &lines, int wrap_width, float bg_r, float bg_g, float bg_b, float bg_a) {
+bool export_chat_png(const char *output_path, const std::vector<ChatLine> &lines, int wrap_width, int render_scale, float bg_r, float bg_g, float bg_b, float bg_a) {
         if (lines.empty()) return false;
+        if (render_scale < 1) render_scale = 1;
+        if (render_scale > 3) render_scale = 3;
+        const float font_size = BASE_FONT_SIZE * render_scale;
+        const int pad_x = BASE_PAD_X * render_scale;
+        const int pad_y = BASE_PAD_Y * render_scale;
+        const int line_spacing = BASE_LINE_SPACING * render_scale;
+        const int outline_r = BASE_OUTLINE_R * render_scale;
+        wrap_width *= render_scale;
         std::vector<unsigned char> font_data;
         if (!load_font_file(font_data)) return false;
         stbtt_fontinfo font;
         if (!stbtt_InitFont(&font, font_data.data(), 0)) return false;
-        float scale = stbtt_ScaleForPixelHeight(&font, FONT_SIZE);
+        float scale = stbtt_ScaleForPixelHeight(&font, font_size);
         int ascent, descent, line_gap;
         stbtt_GetFontVMetrics(&font, &ascent, &descent, &line_gap);
         int scaled_ascent  = (int)ceilf(ascent * scale);
         int scaled_descent = (int)ceilf(-descent * scale);
-        int line_h = scaled_ascent + scaled_descent + LINE_SPACING;
+        int line_h = scaled_ascent + scaled_descent + line_spacing;
         int max_w = 64;
         for (const ChatLine &cl : lines) {
                 int w = 0;
@@ -184,8 +192,8 @@ bool export_chat_png(const char *output_path, const std::vector<ChatLine> &lines
                         count_span(seg.text.c_str(), (int)seg.text.size());
                 total_rows += rows;
         }
-        int img_w = content_w + PAD_X * 2 + OUTLINE_R * 2;
-        int img_h = total_rows * line_h + PAD_Y * 2 + OUTLINE_R * 2;
+        int img_w = content_w + pad_x * 2 + outline_r * 2;
+        int img_h = total_rows * line_h + pad_y * 2 + outline_r * 2;
         if (img_h > 32000 || img_w > 32000) return false;
         size_t pixel_count = (size_t)img_w * (size_t)img_h;
         if (pixel_count > 64 * 1024 * 1024) return false;
@@ -204,9 +212,9 @@ bool export_chat_png(const char *output_path, const std::vector<ChatLine> &lines
                 for (size_t j = 0; j < pixel_count; j++)
                         memcpy(pixels.data() + j * 4, tmpl, 4);
         }
-        const int start_x = PAD_X + OUTLINE_R;
+        const int start_x = pad_x + outline_r;
         const int content_right = start_x + content_w;
-        int pen_y = PAD_Y + OUTLINE_R;
+        int pen_y = pad_y + outline_r;
         for (const ChatLine &cl : lines) {
                 int pen_x = start_x;
                 auto render_span = [&](const char *text, int len, float r, float g, float b) {
@@ -222,7 +230,7 @@ bool export_chat_png(const char *output_path, const std::vector<ChatLine> &lines
                                         pen_x = start_x;
                                         pen_y += line_h;
                                 }
-                                render_string_outlined(pixels.data(), img_w, img_h, &pen_x, pen_y, p, (int)(word_end - p), r, g, b, &font, scale, scaled_ascent);
+                                render_string_outlined(pixels.data(), img_w, img_h, &pen_x, pen_y, p, (int)(word_end - p), r, g, b, &font, scale, scaled_ascent, outline_r);
                                 p = word_end;
                         }
                 };

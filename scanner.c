@@ -5,21 +5,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define SCAN_INTERVAL_MS 1500
+#define SCAN_INTERVAL_MS 500
 #define MSG_QUEUE_CAP 256
 #define DEDUP_CAP 16384
 #define DEDUP_MASK (DEDUP_CAP - 1)
 #define READ_BUF_SIZE (64 * 1024)
-#define NUM_MARKERS 2
-static const char *MARKERS[] = { "ON_MESSAGE", "FUNC::CHAT::ADD_MESSAGE" };
-static const int MARKER_LENS[] = { 10, 23 };
+#define NUM_MARKERS 3
+static const char *MARKERS[] = { "ON_MESSAGE", "FUNC::CHAT::ADD_MESSAGE", "FUNC::CHAT::ADD_MESSAGES" };
+static const int MARKER_LENS[] = { 10, 23, 24 };
 #define MIN_MARKER_LEN 10
-#define MAX_MARKER_LEN 23
+#define MAX_MARKER_LEN 24
 #define MAX_HOTSPOTS 256
-#define FULL_SCAN_EVERY 60
-#define FAST_INTERVAL_MS 800
+#define FULL_SCAN_EVERY 5
+#define FAST_INTERVAL_MS 200
 #define MAX_REGION_SIZE (32 * 1024 * 1024)
 #define SEED_TIMEOUT_MS 3000
+#define PASS_DEDUP_CLEAR_MS 10000
 
 typedef unsigned long long u64;
 
@@ -36,9 +37,19 @@ static int s_dedup_used[DEDUP_CAP];
 static int s_dedup_count;
 static volatile LONG s_seeded;
 static DWORD s_seed_start;
+static DWORD s_pass_dedup_time;
 
 static unsigned char *s_hot_bases[MAX_HOTSPOTS];
 static int s_hot_count;
+
+typedef struct {
+        ScannedMsg msg;
+        size_t addr;
+} PendingMsg;
+
+#define MAX_PENDING 256
+static PendingMsg s_pending[MAX_PENDING];
+static int s_pending_count;
 
 #define PASS_DEDUP_CAP 512
 #define PASS_DEDUP_MASK (PASS_DEDUP_CAP - 1)
@@ -303,7 +314,10 @@ static int parse_chat_json(const char *data, int data_len, ScannedMsg *msg) {
                 snprintf(msg->raw, sizeof(msg->raw), "%s", arg0);
         snprintf(msg->plain, sizeof(msg->plain), "%s", msg->raw);
         strip_color_codes(msg->plain);
-        return msg->plain[0] != '\0';
+        for (int i = 0; msg->plain[i]; i++)
+                if ((msg->plain[i] >= 'A' && msg->plain[i] <= 'Z') || (msg->plain[i] >= 'a' && msg->plain[i] <= 'z') || (msg->plain[i] >= '0' && msg->plain[i] <= '9'))
+                        return 1;
+        return 0;
 }
 
 static DWORD find_fivem_pid(void) {
@@ -371,8 +385,11 @@ static int scan_one_region(HANDLE proc, unsigned char *base, size_t region_size,
                                                 seeded = 1;
                                         }
                                         int text_dup = pass_check_and_mark(msg.plain, plen);
-                                        if (seeded && !text_dup)
-                                                enqueue(&msg);
+                                        if (seeded && !text_dup && s_pending_count < MAX_PENDING) {
+                                                s_pending[s_pending_count].msg = msg;
+                                                s_pending[s_pending_count].addr = marker_addr;
+                                                s_pending_count++;
+                                        }
                                 }
                         }
                         size_t advance = (size_t)(f - p) + mlen;
@@ -409,11 +426,25 @@ static void scan_cached(HANDLE proc, unsigned char *buf) {
                 MEMORY_BASIC_INFORMATION mbi;
                 if (!VirtualQueryEx(proc, s_hot_bases[i], &mbi, sizeof(mbi)))
                         continue;
-                if (mbi.State != MEM_COMMIT || (unsigned char *)mbi.BaseAddress != s_hot_bases[i])
+                if (mbi.State != MEM_COMMIT)
                         continue;
                 size_t sz = mbi.RegionSize > MAX_REGION_SIZE ? MAX_REGION_SIZE : mbi.RegionSize;
-                scan_one_region(proc, s_hot_bases[i], sz, buf);
+                scan_one_region(proc, (unsigned char *)mbi.BaseAddress, sz, buf);
         }
+}
+
+static int pending_cmp(const void *a, const void *b) {
+        size_t aa = ((const PendingMsg *)a)->addr;
+        size_t bb = ((const PendingMsg *)b)->addr;
+        return (aa > bb) - (aa < bb);
+}
+
+static void flush_pending(void) {
+        if (s_pending_count == 0) return;
+        qsort(s_pending, s_pending_count, sizeof(PendingMsg), pending_cmp);
+        for (int i = 0; i < s_pending_count; i++)
+                enqueue(&s_pending[i].msg);
+        s_pending_count = 0;
 }
 
 static DWORD WINAPI scanner_thread(LPVOID param) {
@@ -444,14 +475,21 @@ static DWORD WINAPI scanner_thread(LPVOID param) {
                         }
                 }
                 if (cached_proc) {
-                        if (pass > 1)
+                        if (pass > 1 && GetTickCount() - s_pass_dedup_time > PASS_DEDUP_CLEAR_MS) {
                                 pass_dedup_clear();
+                                s_pass_dedup_time = GetTickCount();
+                        }
+                        s_pending_count = 0;
                         if (pass == 0 || s_hot_count == 0 || pass % FULL_SCAN_EVERY == 0)
                                 scan_process(cached_proc, buf);
                         else
                                 scan_cached(cached_proc, buf);
-                        if (!InterlockedCompareExchange(&s_seeded, 1, 1))
+                        flush_pending();
+                        if (!InterlockedCompareExchange(&s_seeded, 1, 1)) {
                                 InterlockedExchange(&s_seeded, 1);
+                                pass_dedup_clear();
+                                s_pass_dedup_time = GetTickCount();
+                        }
                         pass++;
                 }
                 int interval = (s_hot_count > 0 && pass > 1) ? FAST_INTERVAL_MS : SCAN_INTERVAL_MS;
@@ -483,6 +521,7 @@ int scanner_start(void) {
         pass_dedup_clear();
         s_hot_count = 0;
         s_seed_start = GetTickCount();
+        s_pass_dedup_time = s_seed_start;
         InterlockedExchange(&s_seeded, 0);
         InterlockedExchange(&s_running, 1);
         s_thread = CreateThread(NULL, 0, scanner_thread, NULL, 0, NULL);

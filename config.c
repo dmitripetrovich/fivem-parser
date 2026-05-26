@@ -31,6 +31,9 @@ void config_load(void) {
         g_config.png_bg_g = GetPrivateProfileIntA("General", "PngBgG", 0, ini);
         g_config.png_bg_b = GetPrivateProfileIntA("General", "PngBgB", 0, ini);
         g_config.png_bg_a = GetPrivateProfileIntA("General", "PngBgA", 0, ini);
+        g_config.png_scale = GetPrivateProfileIntA("General", "PngScale", 2, ini);
+        if (g_config.png_scale < 1) g_config.png_scale = 1;
+        if (g_config.png_scale > 3) g_config.png_scale = 3;
 }
 
 void config_save(void) {
@@ -49,4 +52,6 @@ void config_save(void) {
         WritePrivateProfileStringA("General", "PngBgB", buf, ini);
         snprintf(buf, sizeof(buf), "%d", g_config.png_bg_a);
         WritePrivateProfileStringA("General", "PngBgA", buf, ini);
+        snprintf(buf, sizeof(buf), "%d", g_config.png_scale);
+        WritePrivateProfileStringA("General", "PngScale", buf, ini);
 }
