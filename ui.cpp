@@ -800,7 +800,7 @@ void ui_render(GLFWwindow *w) {
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();
-                ImGui::Text("https://github.com/bd53");
+                ImGui::Text("https://github.com/dmitripetrovich");
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();

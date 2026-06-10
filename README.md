@@ -16,7 +16,3 @@ Requires [premake](https://premake.github.io/) and a mingw-w64 toolchain.
 premake5 gmake
 make -C build config=release CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ AR=x86_64-w64-mingw32-ar
 ```
-
-## License
-
-A complete copy of the license is included in the [fivem-parser/LICENSE](./LICENSE) file.
