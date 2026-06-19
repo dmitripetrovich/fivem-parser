@@ -34,7 +34,7 @@ static int run(void) {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
         const char *glsl_version = "#version 130";
-        GLFWwindow *window = glfwCreateWindow(800, 500, "fivem-parser v1.1.4", NULL, NULL);
+        GLFWwindow *window = glfwCreateWindow(800, 500, "fivem-parser v1.1.5", NULL, NULL);
         if (!window) {
                 glfwTerminate();
                 CloseHandle(mutex);

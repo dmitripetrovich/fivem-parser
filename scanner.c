@@ -434,15 +434,8 @@ static void scan_cached(HANDLE proc, unsigned char *buf) {
         }
 }
 
-static int pending_cmp(const void *a, const void *b) {
-        size_t aa = ((const PendingMsg *)a)->addr;
-        size_t bb = ((const PendingMsg *)b)->addr;
-        return (aa > bb) - (aa < bb);
-}
-
 static void flush_pending(void) {
         if (s_pending_count == 0) return;
-        qsort(s_pending, s_pending_count, sizeof(PendingMsg), pending_cmp);
         for (int i = 0; i < s_pending_count; i++)
                 enqueue(&s_pending[i].msg);
         s_pending_count = 0;
