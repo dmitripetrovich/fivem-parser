@@ -1,5 +1,7 @@
 #pragma once
 
+#define PARSER_VERSION "1.1.6"
+
 #ifdef __cplusplus
 extern "C" {
 #endif

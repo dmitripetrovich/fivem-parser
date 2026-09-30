@@ -12,6 +12,10 @@
 #include "parser.h"
 #include "platform.h"
 
+#ifndef _WIN32
+#define strtok_s strtok_r
+#endif
+
 ImVec4 color_palette(int code) {
         switch (code) {
                 case 0: return ImVec4(1.00f, 1.00f, 1.00f, 1.0f);
@@ -119,16 +123,23 @@ static bool s_find_need_scroll = false;
 static bool s_show_ts = true;
 static bool s_live_mode = false;
 static bool s_live_scroll = false;
-static char s_path[PARSER_PATH_MAX * 2] = "";
+static char s_path[PARSER_PATH_MAX] = "";
 
 static std::vector<float> s_line_heights;
 static float s_cache_avail_w = 0.0f;
 static int s_cache_wrap = 0;
 
+static std::vector<float> s_flt_line_heights;
+static float s_flt_cache_avail_w = 0.0f;
+static int s_flt_cache_wrap = 0;
+
 static void invalidate_height_cache(void) {
         s_line_heights.clear();
         s_cache_avail_w = 0.0f;
         s_cache_wrap = 0;
+        s_flt_line_heights.clear();
+        s_flt_cache_avail_w = 0.0f;
+        s_flt_cache_wrap = 0;
 }
 
 static float render_chat_line(const ChatLine &line) {
@@ -338,10 +349,8 @@ static void delete_bulk(const std::vector<bool> &sel, bool is_filter) {
         }
         s_chat.resize(write);
         invalidate_height_cache();
-        s_flt_indices.clear();
-        for (int i = 0; i < (int)s_chat.size(); i++)
-                s_flt_indices.push_back(i);
         rebuild_totals();
+        apply_filter();
 }
 
 static void do_save(GLFWwindow *w, const std::string &text, const char *default_name) {
@@ -476,8 +485,8 @@ void ui_shutdown(void) {
 
 void ui_render(GLFWwindow *w) {
         if (s_live_mode && scanner_is_running()) {
-                ScannedMsg msgs[1];
-                int n = scanner_poll(msgs, 1);
+                ScannedMsg msgs[32];
+                int n = scanner_poll(msgs, 32);
                 if (n > 0) {
                         int h, m, s;
                         platform_local_time_hms(&h, &m, &s);
@@ -796,7 +805,7 @@ void ui_render(GLFWwindow *w) {
         }
         if (ImGui::BeginPopupModal("About", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::Text("fivem-parser");
-                ImGui::Text("Version 1.1.5");
+                ImGui::Text("Version %s", PARSER_VERSION);
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();
@@ -834,8 +843,27 @@ void ui_render(GLFWwindow *w) {
                         float flt_footer = ImGui::GetFrameHeightWithSpacing() + 8;
                         ImGui::BeginChild("##flt_out", ImVec2(0, -flt_footer), ImGuiChildFlags_Borders);
                         if (!s_flt_indices.empty()) {
+                                float flt_avail_w = ImGui::GetContentRegionAvail().x;
+                                ImVec2 flt_win_pos = ImGui::GetWindowPos();
+                                float flt_win_h = ImGui::GetWindowHeight();
+                                const float flt_cull_margin = 400.0f;
+                                if (flt_avail_w != s_flt_cache_avail_w || g_config.wrap_width != s_flt_cache_wrap) {
+                                        s_flt_line_heights.clear();
+                                        s_flt_cache_avail_w = flt_avail_w;
+                                        s_flt_cache_wrap = g_config.wrap_width;
+                                }
+                                if (s_flt_line_heights.size() != s_flt_indices.size())
+                                        s_flt_line_heights.resize(s_flt_indices.size(), 0.0f);
                                 for (int i = 0; i < (int)s_flt_indices.size(); i++) {
                                         int chat_idx = s_flt_indices[i];
+                                        ImVec2 flt_cursor = ImGui::GetCursorScreenPos();
+                                        float flt_cached_h = s_flt_line_heights[i];
+                                        bool flt_force = s_flt_bulk_select_mode;
+                                        bool flt_off_screen = !flt_force && flt_cached_h > 0.0f && ((flt_cursor.y > flt_win_pos.y + flt_win_h + flt_cull_margin) || (flt_cursor.y + flt_cached_h < flt_win_pos.y - flt_cull_margin));
+                                        if (flt_off_screen) {
+                                                ImGui::Dummy(ImVec2(flt_avail_w, flt_cached_h));
+                                                continue;
+                                        }
                                         ImGui::PushID(i);
                                         if (s_flt_bulk_select_mode && i < (int)s_flt_bulk_sel.size()) {
                                                 bool chk = s_flt_bulk_sel[i];
@@ -844,8 +872,9 @@ void ui_render(GLFWwindow *w) {
                                                 ImGui::SameLine(0, 4);
                                         }
                                         ImGui::BeginGroup();
-                                        render_chat_line(s_chat[chat_idx]);
+                                        float fh = render_chat_line(s_chat[chat_idx]);
                                         ImGui::EndGroup();
+                                        s_flt_line_heights[i] = fh;
                                         if (!s_flt_bulk_select_mode && ImGui::BeginPopupContextItem("##fctx", ImGuiPopupFlags_MouseButtonRight)) {
                                                 if (ImGui::MenuItem("Edit Line")) {
                                                         s_edit_line = chat_idx;

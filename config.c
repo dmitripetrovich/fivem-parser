@@ -11,9 +11,8 @@ Config g_config;
 static void get_ini_path(char *out, int size) {
         platform_get_exe_dir(out, size);
         int used = (int)strlen(out);
-        int remaining = size - used - 1;
-        if (remaining > 0)
-                strncat(out, "config.ini", (size_t)remaining);
+        if (used < size)
+                snprintf(out + used, (size_t)(size - used), "config.ini");
 }
 
 static char *trim(char *s) {

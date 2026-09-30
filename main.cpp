@@ -9,6 +9,7 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 #include <windows.h>
+#include <cstdio>
 #define MUTEX_NAME "ChatParser_SingleInstance"
 
 void ui_init(GLFWwindow *window);
@@ -34,7 +35,9 @@ static int run(void) {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
         const char *glsl_version = "#version 130";
-        GLFWwindow *window = glfwCreateWindow(800, 500, "fivem-parser v1.1.5", NULL, NULL);
+        char title[64];
+        snprintf(title, sizeof(title), "fivem-parser v%s", PARSER_VERSION);
+        GLFWwindow *window = glfwCreateWindow(800, 500, title, NULL, NULL);
         if (!window) {
                 glfwTerminate();
                 CloseHandle(mutex);

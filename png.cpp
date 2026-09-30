@@ -12,6 +12,40 @@
 #include <string>
 #include <unordered_map>
 
+static int decode_utf8(const char *text, int len, int pos, int *codepoint) {
+        unsigned char c = (unsigned char)text[pos];
+        if (c < 0x80) {
+                *codepoint = c;
+                return 1;
+        }
+        if ((c & 0xE0) == 0xC0 && pos + 1 < len) {
+                unsigned char c1 = (unsigned char)text[pos + 1];
+                if ((c1 & 0xC0) == 0x80) {
+                        *codepoint = ((c & 0x1F) << 6) | (c1 & 0x3F);
+                        if (*codepoint >= 0x80) return 2;
+                }
+        }
+        if ((c & 0xF0) == 0xE0 && pos + 2 < len) {
+                unsigned char c1 = (unsigned char)text[pos + 1];
+                unsigned char c2 = (unsigned char)text[pos + 2];
+                if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80) {
+                        *codepoint = ((c & 0x0F) << 12) | ((c1 & 0x3F) << 6) | (c2 & 0x3F);
+                        if (*codepoint >= 0x800) return 3;
+                }
+        }
+        if ((c & 0xF8) == 0xF0 && pos + 3 < len) {
+                unsigned char c1 = (unsigned char)text[pos + 1];
+                unsigned char c2 = (unsigned char)text[pos + 2];
+                unsigned char c3 = (unsigned char)text[pos + 3];
+                if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80 && (c3 & 0xC0) == 0x80) {
+                        *codepoint = ((c & 0x07) << 18) | ((c1 & 0x3F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
+                        if (*codepoint >= 0x10000 && *codepoint <= 0x10FFFF) return 4;
+                }
+        }
+        *codepoint = 0xFFFD;
+        return 1;
+}
+
 static const float BASE_FONT_SIZE = 14.0f;
 static const int BASE_PAD_X = 10;
 static const int BASE_PAD_Y = 6;
@@ -99,16 +133,20 @@ static void render_glyph(unsigned char *img, int img_w, int img_h, int px, int p
 }
 
 static void render_string(unsigned char *img, int img_w, int img_h, int *pen_x, int pen_y, const char *text, int len, float r, float g, float b, float alpha_mul, stbtt_fontinfo *font, float scale, int ascent) {
-        for (int i = 0; i < len && text[i]; i++) {
-                int cp = (unsigned char)text[i];
+        for (int i = 0; i < len && text[i];) {
+                int cp;
+                int bytes = decode_utf8(text, len, i, &cp);
                 render_glyph(img, img_w, img_h, *pen_x, pen_y, cp, r, g, b, alpha_mul, font, scale, ascent);
                 int advance, lsb;
                 stbtt_GetCodepointHMetrics(font, cp, &advance, &lsb);
-                if (text[i + 1]) {
-                        int kern = stbtt_GetCodepointKernAdvance(font, cp, (unsigned char)text[i + 1]);
-                        advance += kern;
+                int next_i = i + bytes;
+                if (next_i < len && text[next_i]) {
+                        int next_cp;
+                        decode_utf8(text, len, next_i, &next_cp);
+                        advance += stbtt_GetCodepointKernAdvance(font, cp, next_cp);
                 }
                 *pen_x += (int)(advance * scale + 0.5f);
+                i = next_i;
         }
 }
 
@@ -125,15 +163,19 @@ static void render_string_outlined(unsigned char *img, int img_w, int img_h, int
 
 static int measure_string_width(stbtt_fontinfo *font, float scale, const char *text, int len) {
         int w = 0;
-        for (int i = 0; i < len && text[i]; i++) {
-                int cp = (unsigned char)text[i];
+        for (int i = 0; i < len && text[i];) {
+                int cp;
+                int bytes = decode_utf8(text, len, i, &cp);
                 int advance, lsb;
                 stbtt_GetCodepointHMetrics(font, cp, &advance, &lsb);
-                if (text[i + 1]) {
-                        int kern = stbtt_GetCodepointKernAdvance(font, cp, (unsigned char)text[i + 1]);
-                        advance += kern;
+                int next_i = i + bytes;
+                if (next_i < len && text[next_i]) {
+                        int next_cp;
+                        decode_utf8(text, len, next_i, &next_cp);
+                        advance += stbtt_GetCodepointKernAdvance(font, cp, next_cp);
                 }
                 w += (int)(advance * scale + 0.5f);
+                i = next_i;
         }
         return w;
 }

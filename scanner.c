@@ -296,10 +296,12 @@ static int parse_chat_json(const char *data, int data_len, ScannedMsg *msg) {
         while (args < end && (*args == ' ' || *args == '\t' || *args == '\n' || *args == '\r'))
                 args++;
         if (args >= end || *args != '"') return 0;
-        char arg0[4096] = "";
+        static char arg0[4096];
+        static char arg1[4096];
+        arg0[0] = '\0';
+        arg1[0] = '\0';
         const char *next = extract_json_string(args, end, arg0, sizeof(arg0));
         if (!next) return 0;
-        char arg1[4096] = "";
         int has_two = 0;
         while (next < end && (*next == ' ' || *next == ','))
                 next++;
