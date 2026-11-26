@@ -1,6 +1,6 @@
 #pragma once
 
-#define PARSER_VERSION "1.1.6"
+#define PARSER_VERSION "1.1.7"
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,14 +20,30 @@ void config_save(void);
 
 typedef struct {
         char raw[8192];
-        char plain[8192];
 } ScannedMsg;
+
+typedef enum {
+        SCANNER_IDLE,
+        SCANNER_SEARCHING,
+        SCANNER_DENIED,
+        SCANNER_ATTACHED,
+} ScannerStatus;
 
 int scanner_start(void);
 void scanner_stop(void);
 int scanner_is_running(void);
 int scanner_poll(ScannedMsg *out, int max_count);
+ScannerStatus scanner_status(void);
 
+typedef enum {
+        CODE_NONE,
+        CODE_PALETTE,
+        CODE_RGB,
+        CODE_RESET,
+        CODE_IGNORED,
+} ColorCode;
+
+int color_code_at(const char *s, ColorCode *kind, unsigned *value);
 void strip_color_codes(char *s);
 const char *stristr(const char *h, const char *n);
 
@@ -52,7 +68,25 @@ struct ChatLine {
         std::vector<ColorSeg> segments;
 };
 
+enum PngResult {
+        PNG_OK,
+        PNG_NO_FONT,
+        PNG_TOO_LARGE,
+        PNG_WRITE_FAILED,
+};
+
 ImVec4 color_palette(int code);
 std::vector<ColorSeg> parse_segments(const char *raw);
-bool export_chat_png(const char *output_path, const std::vector<ChatLine> &lines, int wrap_width, int scale, float bg_r, float bg_g, float bg_b, float bg_a);
+PngResult export_chat_png(const char *output_path, const std::vector<const ChatLine *> &lines, int wrap_width, int scale, float bg_r, float bg_g, float bg_b, float bg_a);
+
+template <typename F>
+void for_each_word(const char *p, const char *end, F &&fn) {
+        while (p < end && *p) {
+                const char *word_end = p;
+                while (word_end < end && *word_end && *word_end != ' ') word_end++;
+                if (word_end < end && *word_end == ' ') word_end++;
+                fn(p, word_end);
+                p = word_end;
+        }
+}
 #endif

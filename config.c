@@ -5,8 +5,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
+
+#define INI_SECTION "General"
+#define MAX_INI_ENTRIES 32
 
 Config g_config;
+
+typedef struct {
+        char key[64];
+        int value;
+} IniEntry;
 
 static void get_ini_path(char *out, int size) {
         platform_get_exe_dir(out, size);
@@ -23,41 +32,44 @@ static char *trim(char *s) {
         return s;
 }
 
-static int read_int_key(const char *path, const char *section, const char *key, int fallback) {
+static int read_all(const char *path, const char *section, IniEntry *entries, int max_entries) {
         FILE *f = fopen(path, "r");
-        if (!f) return fallback;
+        if (!f) return 0;
         char line[512];
-        int in_section = 0;
         char want_section[128];
         snprintf(want_section, sizeof(want_section), "[%s]", section);
-        size_t klen = strlen(key);
-        int result = fallback;
-        while (fgets(line, sizeof(line), f)) {
+        int in_section = 0;
+        int count = 0;
+        while (count < max_entries && fgets(line, sizeof(line), f)) {
                 char *p = trim(line);
                 if (!*p || *p == ';' || *p == '#') continue;
                 if (*p == '[') {
                         in_section = (strcmp(p, want_section) == 0);
                         continue;
                 }
-                if (!in_section) continue;
-                if (strncmp(p, key, klen) == 0) {
-                        char *eq = p + klen;
-                        while (*eq == ' ' || *eq == '\t') eq++;
-                        if (*eq != '=') continue;
-                        eq++;
-                        char *val = trim(eq);
-                        result = atoi(val);
+                char *eq = strchr(p, '=');
+                if (!in_section || !eq) continue;
+                *eq = '\0';
+                snprintf(entries[count].key, sizeof(entries[count].key), "%s", trim(p));
+                entries[count].value = atoi(trim(eq + 1));
+                count++;
+        }
+        fclose(f);
+        return count;
+}
+
+static int get_int(const IniEntry *entries, int n_entries, const char *key, int fallback, int lo, int hi) {
+        int value = fallback;
+        for (int i = 0; i < n_entries; i++) {
+                if (strcmp(entries[i].key, key) == 0) {
+                        value = entries[i].value;
                         break;
                 }
         }
-        fclose(f);
-        return result;
+        if (value < lo) value = lo;
+        if (value > hi) value = hi;
+        return value;
 }
-
-typedef struct {
-        char key[64];
-        int value;
-} IniEntry;
 
 static void write_all(const char *path, const char *section, IniEntry *entries, int n_entries) {
         FILE *f = fopen(path, "w");
@@ -71,17 +83,15 @@ static void write_all(const char *path, const char *section, IniEntry *entries, 
 void config_load(void) {
         char ini[PARSER_PATH_MAX];
         get_ini_path(ini, sizeof(ini));
-        g_config.show_timestamps = read_int_key(ini, "General", "ShowTimestamps", 1);
-        g_config.wrap_width = read_int_key(ini, "General", "WrapWidth", 500);
-        if (g_config.wrap_width < 100) g_config.wrap_width = 100;
-        if (g_config.wrap_width > 2000) g_config.wrap_width = 2000;
-        g_config.png_bg_r = read_int_key(ini, "General", "PngBgR", 0);
-        g_config.png_bg_g = read_int_key(ini, "General", "PngBgG", 0);
-        g_config.png_bg_b = read_int_key(ini, "General", "PngBgB", 0);
-        g_config.png_bg_a = read_int_key(ini, "General", "PngBgA", 0);
-        g_config.png_scale = read_int_key(ini, "General", "PngScale", 2);
-        if (g_config.png_scale < 1) g_config.png_scale = 1;
-        if (g_config.png_scale > 3) g_config.png_scale = 3;
+        IniEntry entries[MAX_INI_ENTRIES];
+        int n = read_all(ini, INI_SECTION, entries, MAX_INI_ENTRIES);
+        g_config.show_timestamps = get_int(entries, n, "ShowTimestamps", 1, INT_MIN, INT_MAX) != 0;
+        g_config.wrap_width = get_int(entries, n, "WrapWidth", 500, 100, 2000);
+        g_config.png_bg_r = get_int(entries, n, "PngBgR", 0, 0, 255);
+        g_config.png_bg_g = get_int(entries, n, "PngBgG", 0, 0, 255);
+        g_config.png_bg_b = get_int(entries, n, "PngBgB", 0, 0, 255);
+        g_config.png_bg_a = get_int(entries, n, "PngBgA", 0, 0, 255);
+        g_config.png_scale = get_int(entries, n, "PngScale", 2, 1, 3);
 }
 
 void config_save(void) {
@@ -96,5 +106,5 @@ void config_save(void) {
                 { "PngBgA", g_config.png_bg_a },
                 { "PngScale", g_config.png_scale },
         };
-        write_all(ini, "General", entries, (int)(sizeof(entries) / sizeof(entries[0])));
+        write_all(ini, INI_SECTION, entries, (int)(sizeof(entries) / sizeof(entries[0])));
 }

@@ -3,6 +3,7 @@
 #include "stb_image_write.h"
 #include "stb_truetype.h"
 #include "parser.h"
+#include "platform.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -51,10 +52,14 @@ static const int BASE_PAD_X = 10;
 static const int BASE_PAD_Y = 6;
 static const int BASE_LINE_SPACING = 3;
 static const int BASE_OUTLINE_R = 1;
+static const int MAX_IMAGE_DIM = 32000;
+static const size_t MAX_IMAGE_PIXELS = 64 * 1024 * 1024;
 
-static bool load_font_file(std::vector<unsigned char> &buf) {
-        static const char *candidates[] = { "C:\\Windows\\Fonts\\arialbd.ttf", "C:\\Windows\\Fonts\\arial.ttf", "C:\\Windows\\Fonts\\verdanab.ttf", "C:\\Windows\\Fonts\\verdana.ttf" };
-        for (const char *path : candidates) {
+static bool load_export_font(std::vector<unsigned char> &buf) {
+        static const char *candidates[] = { "arialbd.ttf", "arial.ttf", "verdanab.ttf", "verdana.ttf" };
+        for (const char *name : candidates) {
+                char path[PARSER_PATH_MAX];
+                if (!platform_font_path(name, path, sizeof(path))) continue;
                 FILE *f = fopen(path, "rb");
                 if (!f) continue;
                 fseek(f, 0, SEEK_END);
@@ -70,39 +75,82 @@ static bool load_font_file(std::vector<unsigned char> &buf) {
         return false;
 }
 
-struct CachedGlyph {
+struct Glyph {
+        int index;
+        int advance;
+        bool rasterized;
         unsigned char *bmp;
         int bw, bh, bx0, by0;
 };
 
-static std::unordered_map<int, CachedGlyph> s_glyph_cache;
+struct Font {
+        stbtt_fontinfo info;
+        float scale;
+        int ascent;
+        int line_h;
+        std::unordered_map<int, Glyph> glyphs;
 
-static const CachedGlyph *get_glyph(stbtt_fontinfo *font, float scale, int codepoint) {
-        auto it = s_glyph_cache.find(codepoint);
-        if (it != s_glyph_cache.end())
-                return &it->second;
-        CachedGlyph g;
-        int bx1, by1;
-        stbtt_GetCodepointBitmapBox(font, codepoint, scale, scale, &g.bx0, &g.by0, &bx1, &by1);
-        g.bw = bx1 - g.bx0;
-        g.bh = by1 - g.by0;
-        if (g.bw <= 0 || g.bh <= 0) {
-                g.bmp = nullptr;
-                g.bw = 0;
-                g.bh = 0;
-        } else {
+        ~Font() {
+                for (auto &kv : glyphs)
+                        free(kv.second.bmp);
+        }
+
+        Glyph &glyph(int codepoint) {
+                auto it = glyphs.find(codepoint);
+                if (it != glyphs.end())
+                        return it->second;
+                Glyph g = {};
+                int lsb;
+                g.index = stbtt_FindGlyphIndex(&info, codepoint);
+                stbtt_GetGlyphHMetrics(&info, g.index, &g.advance, &lsb);
+                return glyphs.insert({codepoint, g}).first->second;
+        }
+
+        void rasterize(Glyph &g) {
+                g.rasterized = true;
+                int bx1, by1;
+                stbtt_GetGlyphBitmapBox(&info, g.index, scale, scale, &g.bx0, &g.by0, &bx1, &by1);
+                g.bw = bx1 - g.bx0;
+                g.bh = by1 - g.by0;
+                if (g.bw <= 0 || g.bh <= 0) {
+                        g.bw = 0;
+                        g.bh = 0;
+                        return;
+                }
                 g.bmp = (unsigned char *)malloc((size_t)(g.bw * g.bh));
                 if (g.bmp)
-                        stbtt_MakeCodepointBitmap(font, g.bmp, g.bw, g.bh, g.bw, scale, scale, codepoint);
+                        stbtt_MakeGlyphBitmap(&info, g.bmp, g.bw, g.bh, g.bw, scale, scale, g.index);
         }
-        auto ins = s_glyph_cache.insert({codepoint, g});
-        return &ins.first->second;
+};
+
+struct Canvas {
+        unsigned char *pixels;
+        int w, h;
+};
+
+template <typename F>
+static int walk_glyphs(Font &font, const char *text, int len, F &&fn) {
+        int x = 0;
+        for (int i = 0; i < len && text[i];) {
+                int cp;
+                int bytes = decode_utf8(text, len, i, &cp);
+                Glyph &g = font.glyph(cp);
+                fn(g, x);
+                int advance = g.advance;
+                int next_i = i + bytes;
+                if (next_i < len && text[next_i]) {
+                        int next_cp;
+                        decode_utf8(text, len, next_i, &next_cp);
+                        advance += stbtt_GetGlyphKernAdvance(&font.info, g.index, font.glyph(next_cp).index);
+                }
+                x += (int)(advance * font.scale + 0.5f);
+                i = next_i;
+        }
+        return x;
 }
 
-static void free_glyph_cache(void) {
-        for (auto &kv : s_glyph_cache)
-                free(kv.second.bmp);
-        s_glyph_cache.clear();
+static int text_width(Font &font, const char *text, int len) {
+        return walk_glyphs(font, text, len, [](Glyph &, int) {});
 }
 
 static inline void composite_pixel(unsigned char *dst, float sr, float sg, float sb, float sa) {
@@ -115,134 +163,92 @@ static inline void composite_pixel(unsigned char *dst, float sr, float sg, float
         dst[3] = (unsigned char)(out_a * 255.0f + 0.5f);
 }
 
-static void render_glyph(unsigned char *img, int img_w, int img_h, int px, int py, int codepoint, float r, float g, float b, float alpha_mul, stbtt_fontinfo *font, float scale, int ascent) {
-        const CachedGlyph *gl = get_glyph(font, scale, codepoint);
-        if (!gl || !gl->bmp) return;
-        int dst_x = px + gl->bx0;
-        int dst_y = py + ascent + gl->by0;
-        for (int gy = 0; gy < gl->bh; gy++) {
-                for (int gx = 0; gx < gl->bw; gx++) {
+static void draw_glyph(Font &font, Canvas &img, Glyph &g, int px, int py, float r, float gr, float b, float alpha_mul) {
+        if (!g.rasterized) font.rasterize(g);
+        if (!g.bmp) return;
+        int dst_x = px + g.bx0;
+        int dst_y = py + font.ascent + g.by0;
+        for (int gy = 0; gy < g.bh; gy++) {
+                for (int gx = 0; gx < g.bw; gx++) {
                         int fx = dst_x + gx;
                         int fy = dst_y + gy;
-                        if (fx < 0 || fx >= img_w || fy < 0 || fy >= img_h) continue;
-                        float a = (gl->bmp[gy * gl->bw + gx] / 255.0f) * alpha_mul;
+                        if (fx < 0 || fx >= img.w || fy < 0 || fy >= img.h) continue;
+                        float a = (g.bmp[gy * g.bw + gx] / 255.0f) * alpha_mul;
                         if (a < 0.004f) continue;
-                        composite_pixel(img + (fy * img_w + fx) * 4, r, g, b, a);
+                        composite_pixel(img.pixels + (fy * img.w + fx) * 4, r, gr, b, a);
                 }
         }
 }
 
-static void render_string(unsigned char *img, int img_w, int img_h, int *pen_x, int pen_y, const char *text, int len, float r, float g, float b, float alpha_mul, stbtt_fontinfo *font, float scale, int ascent) {
-        for (int i = 0; i < len && text[i];) {
-                int cp;
-                int bytes = decode_utf8(text, len, i, &cp);
-                render_glyph(img, img_w, img_h, *pen_x, pen_y, cp, r, g, b, alpha_mul, font, scale, ascent);
-                int advance, lsb;
-                stbtt_GetCodepointHMetrics(font, cp, &advance, &lsb);
-                int next_i = i + bytes;
-                if (next_i < len && text[next_i]) {
-                        int next_cp;
-                        decode_utf8(text, len, next_i, &next_cp);
-                        advance += stbtt_GetCodepointKernAdvance(font, cp, next_cp);
-                }
-                *pen_x += (int)(advance * scale + 0.5f);
-                i = next_i;
-        }
+static void draw_text(Font &font, Canvas &img, int px, int py, const char *text, int len, float r, float g, float b, float alpha_mul) {
+        walk_glyphs(font, text, len, [&](Glyph &glyph, int x) {
+                draw_glyph(font, img, glyph, px + x, py, r, g, b, alpha_mul);
+        });
 }
 
-static void render_string_outlined(unsigned char *img, int img_w, int img_h, int *pen_x, int pen_y, const char *text, int len, float r, float g, float b, stbtt_fontinfo *font, float scale, int ascent, int outline_r) {
-        int start_x = *pen_x;
+static void draw_text_outlined(Font &font, Canvas &img, int px, int py, const char *text, int len, const ImVec4 &color, int outline_r) {
         static const int OX[] = {-1, 0, 1, -1, 1, -1, 0, 1};
         static const int OY[] = {-1, -1, -1, 0, 0, 1, 1, 1};
-        for (int o = 0; o < 8; o++) {
-                int tmp_x = start_x + OX[o] * outline_r;
-                render_string(img, img_w, img_h, &tmp_x, pen_y + OY[o] * outline_r, text, len, 0.0f, 0.0f, 0.0f, 0.85f, font, scale, ascent);
-        }
-        render_string(img, img_w, img_h, pen_x, pen_y, text, len, r, g, b, 1.0f, font, scale, ascent);
+        for (int o = 0; o < 8; o++)
+                draw_text(font, img, px + OX[o] * outline_r, py + OY[o] * outline_r, text, len, 0.0f, 0.0f, 0.0f, 0.85f);
+        draw_text(font, img, px, py, text, len, color.x, color.y, color.z, 1.0f);
 }
 
-static int measure_string_width(stbtt_fontinfo *font, float scale, const char *text, int len) {
-        int w = 0;
-        for (int i = 0; i < len && text[i];) {
-                int cp;
-                int bytes = decode_utf8(text, len, i, &cp);
-                int advance, lsb;
-                stbtt_GetCodepointHMetrics(font, cp, &advance, &lsb);
-                int next_i = i + bytes;
-                if (next_i < len && text[next_i]) {
-                        int next_cp;
-                        decode_utf8(text, len, next_i, &next_cp);
-                        advance += stbtt_GetCodepointKernAdvance(font, cp, next_cp);
-                }
-                w += (int)(advance * scale + 0.5f);
-                i = next_i;
+static int layout_line(Font &font, const ChatLine &line, int content_w, Canvas *img, int origin_x, int origin_y, int outline_r) {
+        int pen_x = 0;
+        int rows = 1;
+        for (const ColorSeg &seg : line.segments) {
+                const char *text = seg.text.c_str();
+                for_each_word(text, text + seg.text.size(), [&](const char *word, const char *word_end) {
+                        int len = (int)(word_end - word);
+                        int word_w = text_width(font, word, len);
+                        if (pen_x > 0 && pen_x + word_w > content_w) {
+                                pen_x = 0;
+                                rows++;
+                        }
+                        if (img)
+                                draw_text_outlined(font, *img, origin_x + pen_x, origin_y + (rows - 1) * font.line_h, word, len, seg.color, outline_r);
+                        pen_x += word_w;
+                });
         }
-        return w;
+        return rows;
 }
 
-bool export_chat_png(const char *output_path, const std::vector<ChatLine> &lines, int wrap_width, int render_scale, float bg_r, float bg_g, float bg_b, float bg_a) {
-        if (lines.empty()) return false;
-        if (render_scale < 1) render_scale = 1;
-        if (render_scale > 3) render_scale = 3;
+static PngResult render_png(const char *output_path, const std::vector<const ChatLine *> &lines, const std::vector<unsigned char> &font_data, int wrap_width, int render_scale, float bg_r, float bg_g, float bg_b, float bg_a) {
         const float font_size = BASE_FONT_SIZE * render_scale;
         const int pad_x = BASE_PAD_X * render_scale;
         const int pad_y = BASE_PAD_Y * render_scale;
         const int line_spacing = BASE_LINE_SPACING * render_scale;
         const int outline_r = BASE_OUTLINE_R * render_scale;
         wrap_width *= render_scale;
-        std::vector<unsigned char> font_data;
-        if (!load_font_file(font_data)) return false;
-        stbtt_fontinfo font;
-        if (!stbtt_InitFont(&font, font_data.data(), 0)) return false;
-        float scale = stbtt_ScaleForPixelHeight(&font, font_size);
+        Font font;
+        if (!stbtt_InitFont(&font.info, font_data.data(), 0)) return PNG_NO_FONT;
+        font.scale = stbtt_ScaleForPixelHeight(&font.info, font_size);
         int ascent, descent;
-        stbtt_GetFontVMetrics(&font, &ascent, &descent, nullptr);
-        int scaled_ascent  = (int)ceilf(ascent * scale);
-        int scaled_descent = (int)ceilf(-descent * scale);
-        int line_h = scaled_ascent + scaled_descent + line_spacing;
+        stbtt_GetFontVMetrics(&font.info, &ascent, &descent, nullptr);
+        font.ascent = (int)ceilf(ascent * font.scale);
+        font.line_h = font.ascent + (int)ceilf(-descent * font.scale) + line_spacing;
         int max_w = 64;
-        for (const ChatLine &cl : lines) {
+        for (const ChatLine *line : lines) {
                 int w = 0;
-                for (const ColorSeg &seg : cl.segments)
-                        w += measure_string_width(&font, scale, seg.text.c_str(), (int)seg.text.size());
+                for (const ColorSeg &seg : line->segments)
+                        w += text_width(font, seg.text.c_str(), (int)seg.text.size());
                 if (w > max_w) max_w = w;
         }
         int content_w = (max_w < wrap_width) ? max_w : wrap_width;
-        int total_rows = 0;
-        for (const ChatLine &cl : lines) {
-                int pen_x = 0;
-                int rows = 1;
-                auto count_span = [&](const char *text, int len) {
-                        const char *p = text;
-                        const char *end = text + len;
-                        while (p < end && *p) {
-                                const char *word_end = p;
-                                while (word_end < end && *word_end && *word_end != ' ') word_end++;
-                                if (word_end < end && *word_end == ' ') word_end++;
-                                if (word_end == p) { p++; continue; }
-                                int word_w = measure_string_width(&font, scale, p, (int)(word_end - p));
-                                if (pen_x > 0 && pen_x + word_w > content_w) {
-                                        pen_x = 0;
-                                        rows++;
-                                }
-                                pen_x += word_w;
-                                p = word_end;
-                        }
-                };
-                for (const ColorSeg &seg : cl.segments)
-                        count_span(seg.text.c_str(), (int)seg.text.size());
-                total_rows += rows;
-        }
-        int img_w = content_w + pad_x * 2 + outline_r * 2;
-        int img_h = total_rows * line_h + pad_y * 2 + outline_r * 2;
-        if (img_h > 32000 || img_w > 32000) return false;
+        long long total_rows = 0;
+        for (const ChatLine *line : lines)
+                total_rows += layout_line(font, *line, content_w, nullptr, 0, 0, outline_r);
+        long long img_w = content_w + pad_x * 2 + outline_r * 2;
+        long long img_h = total_rows * font.line_h + pad_y * 2 + outline_r * 2;
+        if (img_h > MAX_IMAGE_DIM || img_w > MAX_IMAGE_DIM) return PNG_TOO_LARGE;
         size_t pixel_count = (size_t)img_w * (size_t)img_h;
-        if (pixel_count > 64 * 1024 * 1024) return false;
+        if (pixel_count > MAX_IMAGE_PIXELS) return PNG_TOO_LARGE;
         std::vector<unsigned char> pixels;
         try {
                 pixels.resize(pixel_count * 4, 0);
         } catch (...) {
-                return false;
+                return PNG_TOO_LARGE;
         }
         if (bg_a > 0.001f) {
                 unsigned char br = (unsigned char)(bg_r * 255.0f + 0.5f);
@@ -253,33 +259,22 @@ bool export_chat_png(const char *output_path, const std::vector<ChatLine> &lines
                 for (size_t j = 0; j < pixel_count; j++)
                         memcpy(pixels.data() + j * 4, tmpl, 4);
         }
+        Canvas img = { pixels.data(), (int)img_w, (int)img_h };
         const int start_x = pad_x + outline_r;
-        const int content_right = start_x + content_w;
         int pen_y = pad_y + outline_r;
-        for (const ChatLine &cl : lines) {
-                int pen_x = start_x;
-                auto render_span = [&](const char *text, int len, float r, float g, float b) {
-                        const char *p = text;
-                        const char *end = text + len;
-                        while (p < end && *p) {
-                                const char *word_end = p;
-                                while (word_end < end && *word_end && *word_end != ' ') word_end++;
-                                if (word_end < end && *word_end == ' ') word_end++;
-                                if (word_end == p) { p++; continue; }
-                                int word_w = measure_string_width(&font, scale, p, (int)(word_end - p));
-                                if (pen_x > start_x && pen_x + word_w > content_right) {
-                                        pen_x = start_x;
-                                        pen_y += line_h;
-                                }
-                                render_string_outlined(pixels.data(), img_w, img_h, &pen_x, pen_y, p, (int)(word_end - p), r, g, b, &font, scale, scaled_ascent, outline_r);
-                                p = word_end;
-                        }
-                };
-                for (const ColorSeg &seg : cl.segments)
-                        render_span(seg.text.c_str(), (int)seg.text.size(), seg.color.x, seg.color.y, seg.color.z);
-                pen_y += line_h;
-        }
-        free_glyph_cache();
-        int ok = stbi_write_png(output_path, img_w, img_h, 4, pixels.data(), img_w * 4);
-        return ok != 0;
+        for (const ChatLine *line : lines)
+                pen_y += layout_line(font, *line, content_w, &img, start_x, pen_y, outline_r) * font.line_h;
+        return stbi_write_png(output_path, img.w, img.h, 4, pixels.data(), img.w * 4) ? PNG_OK : PNG_WRITE_FAILED;
+}
+
+PngResult export_chat_png(const char *output_path, const std::vector<const ChatLine *> &lines, int wrap_width, int render_scale, float bg_r, float bg_g, float bg_b, float bg_a) {
+        if (lines.empty()) return PNG_WRITE_FAILED;
+        if (render_scale < 1) render_scale = 1;
+        if (render_scale > 3) render_scale = 3;
+        std::vector<unsigned char> font_data;
+        if (!load_export_font(font_data)) return PNG_NO_FONT;
+        PngResult result = PNG_TOO_LARGE;
+        for (int scale = render_scale; scale >= 1 && result == PNG_TOO_LARGE; scale--)
+                result = render_png(output_path, lines, font_data, wrap_width, scale, bg_r, bg_g, bg_b, bg_a);
+        return result;
 }

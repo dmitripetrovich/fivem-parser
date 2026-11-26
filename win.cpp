@@ -85,6 +85,15 @@ void platform_get_exe_dir(char *out, int out_size) {
         }
 }
 
+bool platform_font_path(const char *file_name, char *out, int out_size) {
+        char dir[MAX_PATH];
+        UINT dir_len = GetWindowsDirectoryA(dir, sizeof(dir));
+        if (dir_len == 0 || dir_len >= sizeof(dir)) return false;
+        int len = snprintf(out, (size_t)out_size, "%s\\Fonts\\%s", dir, file_name);
+        if (len < 0 || len >= out_size) return false;
+        return GetFileAttributesA(out) != INVALID_FILE_ATTRIBUTES;
+}
+
 void platform_local_time_hms(int *hour, int *minute, int *second) {
         SYSTEMTIME st;
         GetLocalTime(&st);

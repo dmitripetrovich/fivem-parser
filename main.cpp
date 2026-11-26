@@ -17,6 +17,19 @@ void ui_render(GLFWwindow *window);
 void ui_shutdown(void);
 bool ui_get_show_timestamps(void);
 
+static void load_ui_fonts(ImGuiIO &io) {
+        static const char *fallbacks[] = { "segoeui.ttf", "arial.ttf", "tahoma.ttf" };
+        io.Fonts->AddFontDefault();
+        for (const char *name : fallbacks) {
+                char path[PARSER_PATH_MAX];
+                if (!platform_font_path(name, path, sizeof(path))) continue;
+                ImFontConfig cfg;
+                cfg.MergeMode = true;
+                io.Fonts->AddFontFromFileTTF(path, 13.0f, &cfg);
+                break;
+        }
+}
+
 static int run(void) {
         HANDLE mutex = CreateMutexA(NULL, TRUE, MUTEX_NAME);
         if (!mutex) {
@@ -51,6 +64,7 @@ static int run(void) {
         ImGui::CreateContext();
         ImGuiIO &io = ImGui::GetIO();
         io.IniFilename = NULL;
+        load_ui_fonts(io);
         ImGui::StyleColorsDark();
         ImGui_ImplGlfw_InitForOpenGL(window, true);
         ImGui_ImplOpenGL3_Init(glsl_version);

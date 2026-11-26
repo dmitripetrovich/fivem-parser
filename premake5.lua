@@ -29,6 +29,6 @@ project "Parser"
                 "*.cpp",
         }
         component.link()
-        linkoptions { "-mwindows", "-static", "-s" }
+        linkoptions { "-mwindows", "-static", "-s", "-Wl,--stack,16777216" }
         links { "stdc++", "opengl32", "gdi32", "user32", "kernel32", "comdlg32", "shell32", "dwmapi" }
         targetname "Parser"
